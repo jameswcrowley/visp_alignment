@@ -61,9 +61,9 @@ class DataLoader:
 
         header = fits.getheader(all_fits[0], ext=1)
 
-        nx = header["DNAXIS3"]
+        number_x = header["DNAXIS3"]
 
-        for i in range(nx):
+        for i in range(number_x):
             path = all_fits[i]
             data = fits.getdata(path, ext=1)
             header = fits.getheader(path, ext=1)
