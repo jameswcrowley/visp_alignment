@@ -48,6 +48,19 @@ class DataLoader:
         self.cfg = cfg
 
     def load_dkist_slits(self):
+        """
+        Loads the DKIST slit data from the specified directory, extracts the raster and spatial coordinates
+        
+        Parameters:
+        -----------
+        self.cfg.path_to_dkist_data (str): The path to the directory containing the DKIST .fits files
+        
+        Returns:
+        --------
+        raster (np.ndarray): The raster data
+        spatial_x_coordinates (list): The x coordinates of the spatial data
+        spatial_y_coordinates (list): The y coordinates of the spatial data
+        """
         data_dir = Path(self.cfg.path_to_dkist_data)
 
         all_fits = sorted(data_dir.glob("*.fits"))
@@ -62,6 +75,8 @@ class DataLoader:
         header = fits.getheader(all_fits[0], ext=1)
 
         number_x = header["DNAXIS3"]
+
+        print(number_x)
 
         for i in range(number_x):
             path = all_fits[i]
@@ -79,6 +94,18 @@ class DataLoader:
         return np.array(raster), spatial_x_coordinates, spatial_y_coordinates
     
     def _fits_pixel_to_wavelength(self, data, header):
+        """
+        Converts the pixel values in the DKIST data to wavelengths.
+
+        Parameters:
+        -----------
+        data (np.ndarray): The DKIST data
+        header (astropy.io.fits.Header): The FITS header
+
+        Returns:
+        --------
+        slice (np.ndarray): The wavelength slice
+        """
         cdelt2 = header["CDELT2"]
         crpix2 = header["CRPIX2"]
         crval2 = header["CRVAL2"]
@@ -92,6 +119,20 @@ class DataLoader:
         return slice
     
     def _fits_pixel_to_spatial(self, data, header, wavelength_index):
+        """
+        Converts the pixel values in the DKIST data to spatial coordinates.
+
+        Parameters:
+        -----------
+        data (np.ndarray): The DKIST data
+        header (astropy.io.fits.Header): The FITS header containing neccessary keywords
+        wavelength_index (int): The index of the wavelength slice
+
+        Returns:
+        --------
+        spatial_x (list): The x coordinates of the spatial data
+        spatial_y (list): The y coordinates of the spatial data
+        """
         cdelt3 = header["CDELT3"]
         cdelt1 = header["CDELT1"]
         crpix1 = header["CRPIX1"]
@@ -128,6 +169,15 @@ class DataLoader:
     def load_hmi(self, start_time: Time, end_time: Time) -> tuple[list, Time]:
         """
         Downloads all HMI data within one minute of the passed time interval
+
+        Parameters:
+        -----------
+        start_time (Time): The start time of the interval
+        end_time (Time): The end time of the interval
+
+        Returns:
+        --------
+        tuple[list, Time]: A tuple containing the downloaded file paths and the corresponding image times
         """
         search_results = Fido.search(
             a.Instrument.hmi,
@@ -150,6 +200,16 @@ class DataLoader:
     def find_closest_hmi(self, target_time: Time, hmi_times: Time, file_paths: list):
         """
         Finds the HMI file path that is closest in time to the target_time
+
+        Parameters:
+        -----------
+        target_time (Time): The time to which we want to find the closest HMI data
+        hmi_times (Time): The times of the HMI data
+        file_paths (list): The file paths of the HMI data
+
+        Returns:
+        --------
+        tuple[str, int, Time, Quantity]: A tuple containing the closest file path, its index, the closest time, and the time offset
         """
         time_differences = np.abs(hmi_times - target_time)
 
@@ -164,6 +224,15 @@ class DataLoader:
     def get_hmi_map(self, index: int, file_paths: list):
         """
         Returns the map from the path at the passed index
+
+        Parameters:
+        -----------
+        index (int): The index of the file path in the list
+        file_paths (list): The list of file paths
+
+        Returns:
+        --------
+        sunpy.map.GenericMap: The HMI map corresponding to the file path at the given index
         """
         map = sunpy.map.Map(file_paths[index])
 
@@ -188,27 +257,40 @@ class Alignment:
         self.cfg = cfg
 
 
-cfg = Config(
-    "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO", "~/sunpy/data", 30, True
-)
+if __name__ == "__main__":
+    # Example usage
 
-loader = DataLoader(cfg)
+    # cfg = Config(
+    #    path_to_dkist_data="/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO", 
+    #    path_to_sunpy="~/sunpy/data", 
+    #    wavelength_index=30, 
+    #    verbose=True
+    # )
 
-raster, x, y = loader.load_dkist_slits()
+    cfg = Config(
+    path_to_dkist_data='/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY/', 
+    path_to_sunpy="~/sunpy/data/", 
+    wavelength_index=30, 
+    verbose=True
+    )
 
-print(raster.shape)
+    loader = DataLoader(cfg)
 
-wave_index = 30  
-spatial_map = raster[:, wave_index, :]
+    raster, x, y = loader.load_dkist_slits()
 
-plt.figure(figsize=(12, 4))
+    print(raster.shape)
 
-img = plt.imshow(spatial_map, aspect='equal', cmap='magma', origin='lower')
+    wave_index = 30  
+    spatial_map = raster[:, wave_index, :]
 
-plt.colorbar(img, label='Intensity')
-plt.xlabel('Spatial Y Axis (2556 channels / Arcseconds)')
-plt.ylabel('Spatial X Axis (200 channels / Arcseconds)')
-plt.title(f'Monochromatic Spatial Map at Wavelength Index {wave_index}')
-plt.show()
+    plt.figure(figsize=(12, 4))
 
-print("done")
+    img = plt.imshow(spatial_map, aspect='equal', cmap='magma', origin='lower')
+
+    plt.colorbar(img, label='Intensity')
+    plt.xlabel('Spatial Y Axis (2556 channels / Arcseconds)')
+    plt.ylabel('Spatial X Axis (200 channels / Arcseconds)')
+    plt.title(f'Monochromatic Spatial Map at Wavelength Index {wave_index}')
+    plt.show()
+
+    print("done")
