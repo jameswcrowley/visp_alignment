@@ -166,6 +166,8 @@ class DataLoader:
 
         return spatial_x, spatial_y
 
+    def _fits_pixel_to_spatial_using_dkist()
+
     def load_hmi(self, start_time: Time, end_time: Time) -> tuple[list, Time]:
         """
         Downloads all HMI data within one minute of the passed time interval
@@ -276,6 +278,7 @@ if __name__ == "__main__":
 
     loader = DataLoader(cfg)
 
+
     raster, x, y = loader.load_dkist_slits()
 
     print(raster.shape)
@@ -285,7 +288,8 @@ if __name__ == "__main__":
 
     plt.figure(figsize=(12, 4))
 
-    img = plt.imshow(spatial_map, aspect='equal', cmap='magma', origin='lower')
+
+    img = plt.pcolormesh(x, y, spatial_map, shading='auto', cmap='magma', aspect='equal')
 
     plt.colorbar(img, label='Intensity')
     plt.xlabel('Spatial Y Axis (2556 channels / Arcseconds)')
