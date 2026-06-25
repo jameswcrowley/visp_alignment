@@ -166,8 +166,6 @@ class DataLoader:
 
         return spatial_x, spatial_y
 
-    def _fits_pixel_to_spatial_using_dkist()
-
     def load_hmi(self, start_time: Time, end_time: Time) -> tuple[list, Time]:
         """
         Downloads all HMI data within one minute of the passed time interval
@@ -260,15 +258,7 @@ class Alignment:
 
 
 if __name__ == "__main__":
-    # Example usage
-
-    # cfg = Config(
-    #    path_to_dkist_data="/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO", 
-    #    path_to_sunpy="~/sunpy/data", 
-    #    wavelength_index=30, 
-    #    verbose=True
-    # )
-
+    
     cfg = Config(
     path_to_dkist_data='/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY/', 
     path_to_sunpy="~/sunpy/data/", 
