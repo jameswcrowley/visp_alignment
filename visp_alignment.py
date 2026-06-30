@@ -8,6 +8,36 @@ import dkist
 
 import os
 
+def get_time(folder_path):
+    """
+    The method uses the folder_path that directly contains all the fits as a parameter. 
+    """
+    fits_files = [
+        filename for filename in os.listdir(folder_path)
+        if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
+    ]
+
+    first_path = os.path.join(folder_path, fits_files[0])
+    last_path = os.path.join(folder_path, fits_files[-1])
+
+    fits_header1 = fits.open(first_path)[1].header
+    fits_header2 = fits.open(last_path)[1].header
+    
+    return (fits_header1["DATE-AVG"], fits_header2["DATE-AVG"])
+
+def get_headers(folder_path):
+    fits_files = [
+        filename for filename in os.listdir(folder_path)
+        if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
+    ]
+
+    first_path = os.path.join(folder_path, fits_files[0])
+    last_path = os.path.join(folder_path, fits_files[-1])
+    fits_header1 = fits.open(first_path)[1].header
+    fits_header2 = fits.open(last_path)[1].header
+    return
+
+
 class Config:
     """
     Specifies all settings, paths, and other metaparameters used in the alignment
@@ -69,4 +99,4 @@ class Alignment:
                 cfg: Config
                 ):
     
-        self.cfg = cfg
+        self.cfg = cfg 
