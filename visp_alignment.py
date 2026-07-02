@@ -10,6 +10,41 @@ import sunpy.map
 import sunpy.data.sample
 import dkist.net
 import dkist
+import os
+
+def get_time(folder_path):
+    """
+    The method uses the folder_path that directly contains all the fits as a parameter.
+    """
+    fits_files = [
+        filename for filename in os.listdir(folder_path)
+        if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
+    ]
+
+
+    first_path = os.path.join(folder_path, fits_files[0])
+    last_path = os.path.join(folder_path, fits_files[-1])
+
+
+    fits_header1 = fits.open(first_path)[1].header
+    fits_header2 = fits.open(last_path)[1].header
+   
+    return (fits_header1["DATE-AVG"], fits_header2["DATE-AVG"])
+
+
+def get_headers(folder_path):
+    fits_files = [
+        filename for filename in os.listdir(folder_path)
+        if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
+    ]
+
+
+    first_path = os.path.join(folder_path, fits_files[0])
+    last_path = os.path.join(folder_path, fits_files[-1])
+    fits_header1 = fits.open(first_path)[1].header
+    fits_header2 = fits.open(last_path)[1].header
+    return
+
 
 
 class Config:
@@ -237,6 +272,24 @@ class DataLoader:
         map = sunpy.map.Map(file_paths[index])
 
         return map
+
+    def get_dkist_wavelengths(self, folder_path):
+        """
+        Returns the 2d array of the avg intensity of 30 wavelengths across all slits in the first raster
+
+        Parameters:
+        ------------
+        folder_path (str): the path to the DKIST data folder
+        """
+        asdf_path = [file_path for file_path in os.listdir(folder_path) if ".asdf" in file_path][0] #gets all the metadata from the folder
+        ds = dkist.load_dataset(asdf_path)
+        if "stokes" in ds.wcs.world_axis_names:
+            data = np.array(ds[0, 0, :, :30, :].data)
+            return np.mean(data, axis = 1)
+        else:
+            data = np.array(ds[0, :, :30, :].data)
+            return np.mean(data, axis = 1)
+
 
 
 class Interpolator:
