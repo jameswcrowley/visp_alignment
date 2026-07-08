@@ -150,14 +150,14 @@ class DataLoader:
         
         return slice
     
-    def _fits_pixel_to_spatial(self, data, header, wavelength_index):
+    def _fits_pixel_to_spatial(self, data, folder_path, wavelength_index):
         """
         Converts the pixel values in the DKIST data to spatial coordinates.
 
         Parameters:
         -----------
         data (np.ndarray): The DKIST data
-        header (astropy.io.fits.Header): The FITS header containing neccessary keywords
+        folder_path (Path): The path to the folder containing the FITS files
         wavelength_index (int): The index of the wavelength slice
 
         Returns:
@@ -165,16 +165,13 @@ class DataLoader:
         spatial_x (list): The x coordinates of the spatial data
         spatial_y (list): The y coordinates of the spatial data
         """
-        cdelt3 = header["CDELT3"]
-        cdelt1 = header["CDELT1"]
-        crpix1 = header["CRPIX1"]
-        crpix3 = header["CRPIX3"]
-        crval1 = header["CRVAL1"]
-        crval3 = header["CRVAL3"]
-        pc1_1 = header["PC1_1"]
-        pc1_3 = header["PC1_3"]
-        pc3_1 = header["PC3_1"]
-        pc3_3 = header["PC3_3"]
+        fixed_keywords, changing_keywords = self.get_dkist_headers(folder_path)
+        cdelt3 = fixed_keywords[1]
+        cdelt1 = fixed_keywords[0]
+        pc1_1 = fixed_keywords[4]
+        pc1_3 = fixed_keywords[5]
+        pc3_1 = fixed_keywords[6]
+        pc3_3 = fixed_keywords[7]
 
         slit = data[0, wavelength_index, :]
 
@@ -184,6 +181,10 @@ class DataLoader:
 
         for i in range(slit.size):
             if not np.isnan(slit[i]):
+                crpix1 = changing_keywords[2][i]
+                crpix3 = changing_keywords[3][i]
+                crval1 = changing_keywords[0][i]
+                crval3 = changing_keywords[1][i]
                 y_pixel = i
 
                 x = crval1 + cdelt1 * (
@@ -278,16 +279,19 @@ class DataLoader:
         ------------
         folder_path (str): the path to the DKIST data folder
         """
-        asdf_path = [file_path for file_path in os.listdir(folder_path) if ".asdf" in file_path][0] #gets all the metadata from the folder
+        asdf_path = folder_path + [file_path for file_path in os.listdir(folder_path) if ".asdf" in file_path][0] #gets all the metadata from the folder
         ds = dkist.load_dataset(asdf_path)
-        if "stokes" in ds.wcs.world_axis_names:
-            data = np.array(ds[0, 0, :, :30, :].data)
-            return np.nanmean(data, axis = 1)
-        else:
-            data = np.array(ds[0, :, :30, :].data)
-            return np.nanmean(data, axis = 1)
+        # print(ds.wcs.world_axis_names)
+        # if "stokes" in ds.wcs.world_axis_names:
+        #     data = np.array(ds[0, 0, :, :30, :].data)
+        #     return np.nanmean(data, axis = 1)
+        # else:
+        #     data = np.array(ds[0, :, :30, :].data)
+        #     return np.nanmean(data, axis = 1)
+        data = np.array(ds[0, 0, :30, :].data)
+        return np.nanmean(data, axis = 1)
 
-    def get_dkist_headers(folder_path): #read in data step 1
+    def get_dkist_headers(self, folder_path): #read in data step 1
         """
         Returns the 2 arrays of the fixed and changing keywords from the DKIST headers
 
