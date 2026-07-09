@@ -141,34 +141,42 @@ class DataLoader:
 
         Returns:
         ---------
-        fixed_keywords(list): A list of fixed keywords [cdelt1, cdelt3, dnaxis3, dnaxis1, pc1_1, pc1_3, pc3_1, pc3_3]
-        changing_keywords(list of lists): A list of lists containing the changing keywords [crval1, crval3, crpix1, crpix3, date-avg]
+        fixed_keywords(dict): A dictionary of fixed keywords {key: value}
+        changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
         fits_files = [
             filename for filename in os.listdir(folder_path)
-            if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
+            if filename.endswith('.fits') and "_I_" in filename and os.path.isfile(os.path.join(folder_path, filename))
         ]
         header = fits.open(os.path.join(folder_path, fits_files[0]))[1].header
-        fixed_keywords = [
-            header["CDELT1"],
-            header["CDELT3"],
-            header["DNAXIS3"],
-            header["DNAXIS1"],
-            header["PC1_1"],
-            header["PC1_3"],
-            header["PC3_1"],
-            header["PC3_3"]
-        ]
-        changing_keywords = [ [], [], [], [], [] ]
+        fixed_keywords = {
+            "CDELT1": header["CDELT1"],
+            "CDELT3": header["CDELT3"],
+            "DNAXIS3": header["DNAXIS3"],
+            "DNAXIS1": header["DNAXIS1"],
+            "PC1_1": header["PC1_1"],
+            "PC1_3": header["PC1_3"],
+            "PC3_1": header["PC3_1"],
+            "PC3_3": header["PC3_3"]
+        }
+        changing_keywords = {
+            "CRVAL1": [],
+            "CRVAL3": [],
+            "CRPIX1": [],
+            "CRPIX3": [],
+            "DATE-AVG": []
+        }
         for slit_i in fits_files:
             header = fits.open(os.path.join(folder_path, slit_i))[1].header
-            changing_keywords[0].append(header["CRVAL1"])
-            changing_keywords[1].append(header["CRVAL3"])
-            changing_keywords[2].append(header["CRPIX1"])
-            changing_keywords[3].append(header["CRPIX3"])
-            changing_keywords[4].append(header["DATE-AVG"])
+            changing_keywords["CRVAL1"].append(header["CRVAL1"])
+            changing_keywords["CRVAL3"].append(header["CRVAL3"])
+            changing_keywords["CRPIX1"].append(header["CRPIX1"])
+            changing_keywords["CRPIX3"].append(header["CRPIX3"])
+            changing_keywords["DATE-AVG"].append(header["DATE-AVG"])
         
-        return fixed_keywords, changing_keywords
+        return fixed_keywords, changing_keywords, fits_files
+        
+
 
 
 class Interpolator:
