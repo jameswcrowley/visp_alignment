@@ -306,7 +306,7 @@ class DataLoader:
         """
         fits_files = [
             filename for filename in os.listdir(folder_path)
-            if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
+            if filename.endswith('.fits') and "_I_" in filename and os.path.isfile(os.path.join(folder_path, filename))
         ]
         header = fits.open(os.path.join(folder_path, fits_files[0]))[1].header
         fixed_keywords = {
@@ -334,7 +334,7 @@ class DataLoader:
             changing_keywords["CRPIX3"].append(header["CRPIX3"])
             changing_keywords["DATE-AVG"].append(header["DATE-AVG"])
         
-        return fixed_keywords, changing_keywords
+        return fixed_keywords, changing_keywords, fits_files
         
 
 
