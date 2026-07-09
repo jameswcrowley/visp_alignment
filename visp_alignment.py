@@ -111,7 +111,7 @@ class DataLoader:
 
         return hmix, hmiy, hmi_data, image_time
 
-    def get_dkist_wavelengths(self, folder_path): #read in data step 1
+    def get_dkist_wavelengths(self): #read in data step 1
         """
         Returns the 2d array of the avg intensity of 30 wavelengths across all slits in the first raster
 
@@ -119,7 +119,7 @@ class DataLoader:
         ------------
         folder_path (str): the path to the DKIST data folder
         """
-        asdf_path = folder_path + [file_path for file_path in os.listdir(folder_path) if ".asdf" in file_path][0] #gets all the metadata from the folder
+        asdf_path = self.cfg.path_to_dkist_data + [file_path for file_path in os.listdir(self.cfg.path_to_dkist_data) if ".asdf" in file_path][0] #gets all the metadata from the folder
         ds = dkist.load_dataset(asdf_path)
         # print(ds.wcs.world_axis_names)
         # if "stokes" in ds.wcs.world_axis_names:
@@ -131,7 +131,7 @@ class DataLoader:
         data = np.array(ds[0, 0, :30, :].data)
         return np.nanmean(data, axis = 1)
 
-    def get_dkist_headers(self, folder_path): #read in data step 1
+    def get_dkist_headers(self): #read in data step 1
         """
         Returns the 2 arrays of the fixed and changing keywords from the DKIST headers
 
@@ -145,10 +145,10 @@ class DataLoader:
         changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
         fits_files = [
-            filename for filename in os.listdir(folder_path)
-            if filename.endswith('.fits') and "_I_" in filename and os.path.isfile(os.path.join(folder_path, filename))
+            filename for filename in os.listdir(self.cfg.path_to_dkist_data)
+            if filename.endswith('.fits') and "_I_" in filename and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename))
         ]
-        header = fits.open(os.path.join(folder_path, fits_files[0]))[1].header
+        header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
         fixed_keywords = {
             "CDELT1": header["CDELT1"],
             "CDELT3": header["CDELT3"],
@@ -167,7 +167,7 @@ class DataLoader:
             "DATE-AVG": []
         }
         for slit_i in fits_files:
-            header = fits.open(os.path.join(folder_path, slit_i))[1].header
+            header = fits.open(os.path.join(self.cfg.path_to_dkist_data, slit_i))[1].header
             changing_keywords["CRVAL1"].append(header["CRVAL1"])
             changing_keywords["CRVAL3"].append(header["CRVAL3"])
             changing_keywords["CRPIX1"].append(header["CRPIX1"])
@@ -176,8 +176,6 @@ class DataLoader:
         
         return fixed_keywords, changing_keywords, fits_files
         
-
-
 
 class Interpolator:
     """
