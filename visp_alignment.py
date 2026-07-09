@@ -150,14 +150,15 @@ class DataLoader:
         
         return slice
     
-    def _fits_pixel_to_spatial(self, data, folder_path, wavelength_index):
+    def _fits_pixel_to_spatial(self, data, fixed_keywords, changing_keywords, wavelength_index):
         """
         Converts the pixel values in the DKIST data to spatial coordinates.
 
         Parameters:
         -----------
         data (np.ndarray): The DKIST data
-        folder_path (Path): The path to the folder containing the FITS files
+        fixed_keywords (dict): A dictionary of fixed keywords
+        changing_keywords (dict of lists): A dictionary of lists containing the changing keywords
         wavelength_index (int): The index of the wavelength slice
 
         Returns:
@@ -165,13 +166,12 @@ class DataLoader:
         spatial_x (list): The x coordinates of the spatial data
         spatial_y (list): The y coordinates of the spatial data
         """
-        fixed_keywords, changing_keywords = self.get_dkist_headers(folder_path)
-        cdelt3 = fixed_keywords[1]
-        cdelt1 = fixed_keywords[0]
-        pc1_1 = fixed_keywords[4]
-        pc1_3 = fixed_keywords[5]
-        pc3_1 = fixed_keywords[6]
-        pc3_3 = fixed_keywords[7]
+        cdelt3 = fixed_keywords["CDELT3"]
+        cdelt1 = fixed_keywords["CDELT1"]
+        pc1_1 = fixed_keywords["PC1_1"]
+        pc1_3 = fixed_keywords["PC1_3"]
+        pc3_1 = fixed_keywords["PC3_1"]
+        pc3_3 = fixed_keywords["PC3_3"]
 
         slit = data[0, wavelength_index, :]
 
@@ -181,10 +181,10 @@ class DataLoader:
 
         for i in range(slit.size):
             if not np.isnan(slit[i]):
-                crpix1 = changing_keywords[2][i]
-                crpix3 = changing_keywords[3][i]
-                crval1 = changing_keywords[0][i]
-                crval3 = changing_keywords[1][i]
+                crpix1 = changing_keywords["CRPIX1"][i]
+                crpix3 = changing_keywords["CRPIX3"][i]
+                crval1 = changing_keywords["CRVAL1"][i]
+                crval3 = changing_keywords["CRVAL3"][i]
                 y_pixel = i
 
                 x = crval1 + cdelt1 * (
@@ -301,32 +301,38 @@ class DataLoader:
 
         Returns:
         ---------
-        fixed_keywords(list): A list of fixed keywords [cdelt1, cdelt3, dnaxis3, dnaxis1, pc1_1, pc1_3, pc3_1, pc3_3]
-        changing_keywords(list of lists): A list of lists containing the changing keywords [crval1, crval3, crpix1, crpix3, date-avg]
+        fixed_keywords(dict): A dictionary of fixed keywords {key: value}
+        changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
         fits_files = [
             filename for filename in os.listdir(folder_path)
             if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
         ]
         header = fits.open(os.path.join(folder_path, fits_files[0]))[1].header
-        fixed_keywords = [
-            header["CDELT1"],
-            header["CDELT3"],
-            header["DNAXIS3"],
-            header["DNAXIS1"],
-            header["PC1_1"],
-            header["PC1_3"],
-            header["PC3_1"],
-            header["PC3_3"]
-        ]
-        changing_keywords = [ [], [], [], [], [] ]
+        fixed_keywords = {
+            "CDELT1": header["CDELT1"],
+            "CDELT3": header["CDELT3"],
+            "DNAXIS3": header["DNAXIS3"],
+            "DNAXIS1": header["DNAXIS1"],
+            "PC1_1": header["PC1_1"],
+            "PC1_3": header["PC1_3"],
+            "PC3_1": header["PC3_1"],
+            "PC3_3": header["PC3_3"]
+        }
+        changing_keywords = {
+            "CRVAL1": [],
+            "CRVAL3": [],
+            "CRPIX1": [],
+            "CRPIX3": [],
+            "DATE-AVG": []
+        }
         for slit_i in fits_files:
             header = fits.open(os.path.join(folder_path, slit_i))[1].header
-            changing_keywords[0].append(header["CRVAL1"])
-            changing_keywords[1].append(header["CRVAL3"])
-            changing_keywords[2].append(header["CRPIX1"])
-            changing_keywords[3].append(header["CRPIX3"])
-            changing_keywords[4].append(header["DATE-AVG"])
+            changing_keywords["CRVAL1"].append(header["CRVAL1"])
+            changing_keywords["CRVAL3"].append(header["CRVAL3"])
+            changing_keywords["CRPIX1"].append(header["CRPIX1"])
+            changing_keywords["CRPIX3"].append(header["CRPIX3"])
+            changing_keywords["DATE-AVG"].append(header["DATE-AVG"])
         
         return fixed_keywords, changing_keywords
         
