@@ -7,6 +7,7 @@ import astropy.units as u
 import matplotlib.pyplot as plt
 from sunpy.net import Fido, attrs as a
 import sunpy.map
+from sunpy import map as map
 import sunpy.data.sample
 import dkist.net
 import dkist
@@ -38,10 +39,6 @@ def get_time(folder_path):
     fits_header2 = fits.open(last_path)[1].header
    
     return (fits_header1["DATE-AVG"], fits_header2["DATE-AVG"])
-
-
-
-
 
 
 class Config:
@@ -79,127 +76,7 @@ class DataLoader:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def load_dkist_slits(self):
-        """
-        Loads the DKIST slit data from the specified directory, extracts the raster and spatial coordinates
-        
-        Parameters:
-        -----------
-        self.cfg.path_to_dkist_data (str): The path to the directory containing the DKIST .fits files
-        
-        Returns:
-        --------
-        raster (np.ndarray): The raster data
-        spatial_x_coordinates (list): The x coordinates of the spatial data
-        spatial_y_coordinates (list): The y coordinates of the spatial data
-        """
-        data_dir = Path(self.cfg.path_to_dkist_data)
-
-        all_fits = sorted(data_dir.glob("*.fits"))
-
-        if not all_fits:
-            raise FileNotFoundError(f"No .fits files found in {data_dir}")
-
-        raster = []
-        spatial_x_coordinates = []
-        spatial_y_coordinates = []
-
-        header = fits.getheader(all_fits[0], ext=1)
-
-        number_x = header["DNAXIS3"]
-
-        print(number_x)
-
-        for i in range(number_x):
-            path = all_fits[i]
-            data = fits.getdata(path, ext=1)
-            header = fits.getheader(path, ext=1)
-
-            spatial_x, spatial_y = self._fits_pixel_to_spatial(
-                data, header, self.cfg.wavelength_index
-            )
-
-            raster.append(data[0, :, :])
-            spatial_x_coordinates.append(spatial_x)
-            spatial_y_coordinates.append(spatial_y)
-
-        return np.array(raster), spatial_x_coordinates, spatial_y_coordinates
-    
-    def _fits_pixel_to_wavelength(self, data, header):
-        """
-        Converts the pixel values in the DKIST data to wavelengths.
-
-        Parameters:
-        -----------
-        data (np.ndarray): The DKIST data
-        header (astropy.io.fits.Header): The FITS header
-
-        Returns:
-        --------
-        slice (np.ndarray): The wavelength slice
-        """
-        cdelt2 = header["CDELT2"]
-        crpix2 = header["CRPIX2"]
-        crval2 = header["CRVAL2"]
-
-        slice = data[0, :, 0]
-
-        for i in range(len(slice)):
-            wavelength = crval2 + cdelt2 * (i - crpix2)
-            slice[i] = wavelength
-        
-        return slice
-    
-    def _fits_pixel_to_spatial(self, data, fixed_keywords, changing_keywords, wavelength_index):
-        """
-        Converts the pixel values in the DKIST data to spatial coordinates.
-
-        Parameters:
-        -----------
-        data (np.ndarray): The DKIST data
-        fixed_keywords (dict): A dictionary of fixed keywords
-        changing_keywords (dict of lists): A dictionary of lists containing the changing keywords
-        wavelength_index (int): The index of the wavelength slice
-
-        Returns:
-        --------
-        spatial_x (list): The x coordinates of the spatial data
-        spatial_y (list): The y coordinates of the spatial data
-        """
-        cdelt3 = fixed_keywords["CDELT3"]
-        cdelt1 = fixed_keywords["CDELT1"]
-        pc1_1 = fixed_keywords["PC1_1"]
-        pc1_3 = fixed_keywords["PC1_3"]
-        pc3_1 = fixed_keywords["PC3_1"]
-        pc3_3 = fixed_keywords["PC3_3"]
-
-        slit = data[0, wavelength_index, :]
-
-        x_pixel = 0
-        spatial_x = []
-        spatial_y = []
-
-        for i in range(slit.size):
-            if not np.isnan(slit[i]):
-                crpix1 = changing_keywords["CRPIX1"][i]
-                crpix3 = changing_keywords["CRPIX3"][i]
-                crval1 = changing_keywords["CRVAL1"][i]
-                crval3 = changing_keywords["CRVAL3"][i]
-                y_pixel = i
-
-                x = crval1 + cdelt1 * (
-                    pc1_1 * (x_pixel - crpix1) + pc1_3 * (y_pixel - crpix3)
-                )
-                y = crval3 + cdelt3 * (
-                    pc3_1 * (x_pixel - crpix1) + pc3_3 * (y_pixel - crpix3)
-                )
-
-                spatial_x.append(x)
-                spatial_y.append(y)
-
-        return spatial_x, spatial_y
-
-    def load_hmi(self, start_time: Time, end_time: Time) -> tuple[list, Time]:
+    def load_hmi(self, start_time: Time, end_time: Time):
         """
         Downloads all HMI data within one minute of the passed time interval
 
@@ -208,9 +85,7 @@ class DataLoader:
         start_time (Time): The start time of the interval
         end_time (Time): The end time of the interval
 
-        Returns:
-        --------
-        tuple[list, Time]: A tuple containing the downloaded file paths and the corresponding image times
+        ** Currently only reads in middle file, not all related files **
         """
         search_results = Fido.search(
             a.Instrument.hmi,
@@ -218,58 +93,23 @@ class DataLoader:
             a.Time(start_time - 1 * u.minute, end_time + 1 * u.minute),
         )
 
-        downloaded_file_paths = Fido.fetch(
-            search_results, path=self.cfg.path_to_sunpy, progress=self.cfg.verbose
+        hmi_files = Fido.fetch(
+            search_results, path=self.cfg.path_to_sunpy, progress=self.cfg.verbose, site="NSO"
         )
 
-        image_times = []
-        for file_path in downloaded_file_paths:
-            hmi_map = sunpy.map.Map(file_path)
-            image_times.append(hmi_map.date)
-        image_times = Time(image_times)
+        # read in the middle file using scipy.map to extract the coordinates and data.
+        hmi = map.Map(hmi_files[0])
 
-        return downloaded_file_paths, image_times
+        # read in the x and y coordinates as seperate arrays.
+        hmix = map.all_coordinates_from_map(hmi).Tx
+        hmiy = map.all_coordinates_from_map(hmi).Ty
+        
+        # read in the intensity data as a 2D array.  
+        hmi_data = hmi.data
 
-    def find_closest_hmi(self, target_time: Time, hmi_times: Time, file_paths: list):
-        """
-        Finds the HMI file path that is closest in time to the target_time
+        image_time = hmi.date
 
-        Parameters:
-        -----------
-        target_time (Time): The time to which we want to find the closest HMI data
-        hmi_times (Time): The times of the HMI data
-        file_paths (list): The file paths of the HMI data
-
-        Returns:
-        --------
-        tuple[str, int, Time, Quantity]: A tuple containing the closest file path, its index, the closest time, and the time offset
-        """
-        time_differences = np.abs(hmi_times - target_time)
-
-        closest_index = time_differences.argmin()
-
-        closest_file_path = file_paths[closest_index]
-        closest_time = hmi_times[closest_index]
-        time_offset = time_differences[closest_index].to(u.second)
-
-        return closest_file_path, closest_index, closest_time, time_offset
-
-    def get_hmi_map(self, index: int, file_paths: list):
-        """
-        Returns the map from the path at the passed index
-
-        Parameters:
-        -----------
-        index (int): The index of the file path in the list
-        file_paths (list): The list of file paths
-
-        Returns:
-        --------
-        sunpy.map.GenericMap: The HMI map corresponding to the file path at the given index
-        """
-        map = sunpy.map.Map(file_paths[index])
-
-        return map
+        return hmix, hmiy, hmi_data, image_time
 
     def get_dkist_wavelengths(self, folder_path): #read in data step 1
         """
