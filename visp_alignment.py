@@ -12,6 +12,8 @@ import sunpy.data.sample
 import dkist.net
 import dkist
 import os
+from scipy import interpolate as interp
+import scipy.optimize as opt
 
 def get_time(folder_path):
     """
@@ -119,7 +121,7 @@ class DataLoader:
         ------------
         folder_path (str): the path to the DKIST data folder
         """
-        asdf_path = self.cfg.path_to_dkist_data + [file_path for file_path in os.listdir(self.cfg.path_to_dkist_data) if ".asdf" in file_path][0] #gets all the metadata from the folder
+        asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
         # print(ds.wcs.world_axis_names)
         # if "stokes" in ds.wcs.world_axis_names:
@@ -184,6 +186,122 @@ class Interpolator:
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
+    
+    def construct_dkist_coords(self, fixed_keywords, changing_keywords):
+        """
+        This function constructs the default coordinates of the DKIST data from the fits files. 
+        It returns a 3D array of the coordinates, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
+        
+        Parameters:
+        -----------
+        all_fits (list): a list of the fits files to load in.
+        path_to_local_fits (str): the path to the local fits files.
+
+        Returns:
+        --------
+        coords_new (numpy.ndarray): a 3D array of the coordinates, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
+        """
+
+        cdelt1 = fixed_keywords['CDELT1']
+        cdelt3 = fixed_keywords['CDELT3']
+
+        pc1_1 = fixed_keywords['PC1_1']
+        pc1_3 = fixed_keywords['PC1_3']
+        pc3_1 = fixed_keywords['PC3_1']
+        pc3_3 = fixed_keywords['PC3_3']
+
+        nx = fixed_keywords['DNAXIS3']
+        ny = fixed_keywords['DNAXIS1']
+
+        # initialize an empty array to fill with the coordinates. the shape is (nx, ny, 2) because we have nx by ny pixels and each pixel has an x and y coordinate.
+        coords_new = np.zeros((nx, ny, 2))
+
+
+        # loop through each fits file, extract the relevant header keywords, and calculate the coordinates for each pixel in that slit. then fill the coords_new array with those coordinates.
+        for i in range(nx):
+            crval1 = changing_keywords['CRVAL1'][i]
+            crval3 = changing_keywords['CRVAL3'][i]
+
+            crpix1 = changing_keywords['CRPIX1'][i]
+            crpix3 = changing_keywords['CRPIX3'][i]
+
+            # y-index of the position of the pixel ALONG the slit (i.e. 1 to ny). This is used to calculate the coordinates of each pixel along the slit.
+            indices = np.linspace(1, ny, ny, dtype = int)
+
+            # calculate the coordinates of each pixel along the slit using the header keywords and the y-index. 
+            # This formula is the linear transformation-matrix form of the coordinate assembly.
+            slit_coords_x = crval3 + cdelt3 * (pc3_3 * (i - crpix3) + pc3_1 * (indices - crpix1))
+            slit_coords_y = crval1 + cdelt1 * (pc1_3 * (i - crpix3) + pc1_1 * (indices - crpix1))
+
+            # save each pixel's coordinates into x and y indices of the the coords_new array. 
+            coords_new[i, :, 0] = slit_coords_x
+            coords_new[i, :, 1] = slit_coords_y
+
+        return coords_new
+    
+    def identify_relevant_hmi_data(self, coords_new, hmix, hmiy, hmi_data, delta = 20):
+        """
+        This function identifies the relevant HMI data that overlaps with the DKIST data, with a buffer of delta arcseconds on each side. 
+        It returns the x and y coordinates of the relevant HMI data, as well as the intensity data.
+        
+        Parameters:
+        -----------
+        coords_new (numpy.ndarray): a 3D array of the coordinates of the DKIST data, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
+        hmix (numpy.ndarray): the x coordinates of the HMI data.
+        hmiy (numpy.ndarray): the y coordinates of the HMI data.
+        hmi_data (numpy.ndarray): the intensity data of the HMI data.
+        delta (float): the buffer in arcseconds to add to the DKIST data when identifying the relevant HMI data. Default is 20 arcseconds.
+        
+        Returns:
+        --------
+        relavent_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
+        relavent_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
+        relavent_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
+        """
+        # construct a box of HMI coordinates and data around the DKIST data, with a buffer of delta arcseconds on each side. 
+        relavent_hmix_indices = sorted([np.argmin(np.abs(np.min(coords_new[:, :, 0]) - delta - hmix[0, :].value)), np.argmin(np.abs(np.max(coords_new[:, :, 0]) + delta - hmix[0, :].value))])
+        relavent_hmiy_indices = sorted([np.argmin(np.abs(np.min(coords_new[:, :, 1]) - delta - hmiy[:, 0].value)), np.argmin(np.abs(np.max(coords_new[:, :, 1]) + delta - hmiy[:, 0].value))])
+
+        # crop the x and y coordinates of the HMI data to the relevant coordinates. Note that the HMI data is transposed because the x and y coordinates are in the opposite order of the data array.
+        relavent_hmix = hmix[0, relavent_hmix_indices[0]:relavent_hmix_indices[1]].value
+        relavent_hmiy = hmiy[relavent_hmiy_indices[0]:relavent_hmiy_indices[1], 0].value
+
+        # crop the HMI data to the relevant coordinates. Note that the HMI data is transposed because the x and y coordinates are in the opposite order of the data array.
+        relavent_hmi_data= hmi_data.T[relavent_hmix_indices[0]:relavent_hmix_indices[1], relavent_hmiy_indices[0]:relavent_hmiy_indices[1]].T
+
+        return relavent_hmix, relavent_hmiy, relavent_hmi_data
+
+    def interpolate_hmi_to_coords(self, relavent_hmix, relavent_hmiy, relavent_hmi_data, coords_new):
+        """
+        This function interpolates the relevant HMI data onto the DKIST coordinates. It returns a 2D array of the interpolated HMI data, with shape (nx, ny), where nx is the number of slits and ny is the number of pixels along the slit.
+        
+        Parameters:
+        -----------
+        relavent_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
+        relavent_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
+        relavent_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
+        coords_new (numpy.ndarray): a 3D array of the coordinates of the DKIST data, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
+        
+        Returns:
+        --------
+        Z_fine (numpy.ndarray): a 2D array of the interpolated HMI data, with shape (nx, ny), where nx is the number of slits and ny is the number of pixels along the slit.
+        """
+        # an example of one way to interpolate the HMI data onto the DKIST coordinates. 
+        # I don't know if this is the final method we'll use but it is a working example.
+        
+        # set up the interpolator:
+        grid_interpolator = interp.RegularGridInterpolator(
+            (relavent_hmiy, relavent_hmix),
+            relavent_hmi_data, 
+            method='cubic',
+            bounds_error=False, 
+            fill_value=np.nan
+        )
+
+        # perform the interpolation onto whatever coordiantes you give it. Here, we give it the DKIST coordinates.
+        Z_fine = grid_interpolator((coords_new[:, :, 1], coords_new[:, :, 0]))
+
+        return Z_fine
 
 
 class Alignment:
