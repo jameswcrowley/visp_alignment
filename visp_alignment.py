@@ -52,8 +52,8 @@ class Config:
         self,
         path_to_dkist_data: str,
         path_to_sunpy: str,
-        wavelength_index: int,
-        verbose: bool,
+        wavelength_index = None,
+        verbose = False
     ):
         self.path_to_dkist_data = path_to_dkist_data
         self.path_to_sunpy = path_to_sunpy
@@ -115,23 +115,82 @@ class DataLoader:
 
     def get_dkist_wavelengths(self): #read in data step 1
         """
-        Returns the 2d array of the avg intensity of 30 wavelengths across all slits in the first raster
-
-        Parameters:
-        ------------
-        folder_path (str): the path to the DKIST data folder
+        Returns a 2D spatial intensity map where each pixel contains the average
+        intensity of the brightest/more intense wavelength samples (above 95th percentile) from the DKIST dataset.
+        Returns:
+        ----------
+        mean_data(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
         """
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
-        # print(ds.wcs.world_axis_names)
-        # if "stokes" in ds.wcs.world_axis_names:
-        #     data = np.array(ds[0, 0, :, :30, :].data)
-        #     return np.nanmean(data, axis = 1)
-        # else:
-        #     data = np.array(ds[0, :, :30, :].data)
-        #     return np.nanmean(data, axis = 1)
-        data = np.array(ds[0, 0, :30, :].data)
-        return np.nanmean(data, axis = 1)
+        all_data = np.array(ds[0, :, :, :].data)
+
+        slit1_data = all_data[0, :, :] #data of all wavelengths across the first slit
+        print(slit1_data.shape)
+
+        median_data = np.array([]) #median of each wavelength sample across the first slit
+        for i in range(slit1_data.shape[0]):
+            median_data = np.append(median_data, np.nanmedian(slit1_data[i, :]))
+        print(median_data)
+
+        threshold = np.percentile(median_data, 95) #95th percentile of the median values
+        indicies = np.where(median_data > threshold)[0] #gets the indicies of the median values above the threshold
+        print(indicies)
+ 
+        relevant_data = all_data[:, indicies, :] #gets the data of all wavelengths across all slits for the indicies above the threshold
+        # for i in indicies:
+        #     data = np.append(data, np.array(ds[0, :, i, :].data))
+        print(relevant_data)
+
+
+        mean_data = np.nanmean(relevant_data, axis = 0) #mean of the data across the wavelength samples above the threshold
+        return mean_data 
+
+        # data = np.asarray(ds.data)
+        # if data.ndim == 0:
+        #     raise ValueError("The DKIST dataset did not contain any data")
+
+        # wavelength_axis = None
+        # for axis, axis_name in enumerate(getattr(ds, "world_axis_physical_types", [])):
+        #     if axis_name is not None and ("wavelength" in axis_name.lower() or "em.wl" in axis_name.lower()):
+        #         wavelength_axis = axis
+        #         break
+
+        # if wavelength_axis is None:
+        #     wavelength_axis = 1 if data.ndim > 1 else 0
+
+        # wavelength_data = np.moveaxis(data, wavelength_axis, 0)
+        # wavelength_data = wavelength_data[:30]
+        # intensity_map = np.nanmean(wavelength_data, axis=0)
+        # intensity_map = np.squeeze(intensity_map)
+
+        # if intensity_map.ndim > 2:
+        #     intensity_map = np.nanmean(
+        #         intensity_map,
+        #         axis=tuple(range(intensity_map.ndim - 2)),
+        #     )
+
+        # if intensity_map.ndim != 2:
+        #     raise ValueError(
+        #         f"Expected a 2D intensity map, but received shape {intensity_map.shape}"
+        #     )
+
+        # return intensity_map
+
+    
+    def get_dkist_wavelengths2(self):
+        """
+        Returns a 2D spatial intensity map where each pixel contains the average
+        intensity of the first 30 wavelengths
+        ----------
+        numpy.ndarray: A 2D array of the mean intensity values across the first 30 wavelengths
+        """
+        asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
+        ds = dkist.load_dataset(asdf_path)
+
+        data = np.array(ds[0, :, :30, :].data)
+        # print("original data", data)
+        return np.nanmean(data, axis = 0)
 
     def get_dkist_headers(self): #read in data step 1
         """
@@ -194,8 +253,8 @@ class Interpolator:
         
         Parameters:
         -----------
-        all_fits (list): a list of the fits files to load in.
-        path_to_local_fits (str): the path to the local fits files.
+        fixed_keywords (dict): a dictionary of the fixed keywords from the DKIST headers, with keys 'CDELT1', 'CDELT3', 'PC1_1', 'PC1_3', 'PC3_1', 'PC3_3', 'DNAXIS3', and 'DNAXIS1'.
+        changing_keywords (dict): a dictionary of the changing keywords from the DKIST headers, with keys 'CRVAL1', 'CRVAL3', 'CRPIX1', 'CRPIX3', and 'DATE-AVG'. Each key maps to a list of values, one for each slit.
 
         Returns:
         --------
