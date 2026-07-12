@@ -184,7 +184,7 @@ class DataLoader:
 
         data = np.array(ds[0, :, :30, :].data)
         # print("original data", data)
-        return np.nanmean(data, axis = 0)
+        return np.nanmean(data, axis = 1)
 
     def get_dkist_headers(self): #read in data step 1
         """
@@ -307,32 +307,32 @@ class Interpolator:
         
         Returns:
         --------
-        relavent_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
-        relavent_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
-        relavent_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
+        relevant_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
+        relevant_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
+        relevant_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
         """
         # construct a box of HMI coordinates and data around the DKIST data, with a buffer of delta arcseconds on each side. 
-        relavent_hmix_indices = sorted([np.argmin(np.abs(np.min(coords[:, :, 0]) - delta - hmix[0, :].value)), np.argmin(np.abs(np.max(coords[:, :, 0]) + delta - hmix[0, :].value))])
-        relavent_hmiy_indices = sorted([np.argmin(np.abs(np.min(coords[:, :, 1]) - delta - hmiy[:, 0].value)), np.argmin(np.abs(np.max(coords[:, :, 1]) + delta - hmiy[:, 0].value))])
+        relevant_hmix_indices = sorted([np.argmin(np.abs(np.min(coords[:, :, 0]) - delta - hmix[0, :].value)), np.argmin(np.abs(np.max(coords[:, :, 0]) + delta - hmix[0, :].value))])
+        relevant_hmiy_indices = sorted([np.argmin(np.abs(np.min(coords[:, :, 1]) - delta - hmiy[:, 0].value)), np.argmin(np.abs(np.max(coords[:, :, 1]) + delta - hmiy[:, 0].value))])
 
         # crop the x and y coordinates of the HMI data to the relevant coordinates. Note that the HMI data is transposed because the x and y coordinates are in the opposite order of the data array.
-        relavent_hmix = hmix[0, relavent_hmix_indices[0]:relavent_hmix_indices[1]].value
-        relavent_hmiy = hmiy[relavent_hmiy_indices[0]:relavent_hmiy_indices[1], 0].value
+        relevant_hmix = hmix[0, relevant_hmix_indices[0]:relevant_hmix_indices[1]].value
+        relevant_hmiy = hmiy[relevant_hmiy_indices[0]:relevant_hmiy_indices[1], 0].value
 
         # crop the HMI data to the relevant coordinates. Note that the HMI data is transposed because the x and y coordinates are in the opposite order of the data array.
-        relavent_hmi_data= hmi_data.T[relavent_hmix_indices[0]:relavent_hmix_indices[1], relavent_hmiy_indices[0]:relavent_hmiy_indices[1]].T
+        relevant_hmi_data= hmi_data.T[relevant_hmix_indices[0]:relevant_hmix_indices[1], relevant_hmiy_indices[0]:relevant_hmiy_indices[1]].T
 
-        return relavent_hmix, relavent_hmiy, relavent_hmi_data
+        return relevant_hmix, relevant_hmiy, relevant_hmi_data
 
-    def interpolate_hmi_to_coords(self, relavent_hmix, relavent_hmiy, relavent_hmi_data, coords):
+    def interpolate_hmi_to_coords(self, relevant_hmix, relevant_hmiy, relevant_hmi_data, coords):
         """
         This function interpolates the relevant HMI data onto the DKIST coordinates. It returns a 2D array of the interpolated HMI data, with shape (nx, ny), where nx is the number of slits and ny is the number of pixels along the slit.
         
         Parameters:
         -----------
-        relavent_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
-        relavent_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
-        relavent_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
+        relevant_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
+        relevant_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
+        relevant_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
         coords (numpy.ndarray): a 3D array of the coordinates of the DKIST data, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
         
         Returns:
@@ -344,8 +344,8 @@ class Interpolator:
         
         # set up the interpolator:
         grid_interpolator = interp.RegularGridInterpolator(
-            (relavent_hmiy, relavent_hmix),
-            relavent_hmi_data, 
+            (relevant_hmiy, relevant_hmix),
+            relevant_hmi_data, 
             method='cubic',
             bounds_error=False, 
             fill_value=np.nan
