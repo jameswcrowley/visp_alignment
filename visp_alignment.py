@@ -6,7 +6,6 @@ from astropy.time import Time, TimeDelta
 import astropy.units as u
 import matplotlib.pyplot as plt
 from sunpy.net import Fido, attrs as a
-import sunpy.map
 from sunpy import map as map
 import sunpy.data.sample
 import dkist.net
@@ -15,32 +14,7 @@ import os
 from scipy import interpolate as interp
 import scipy.optimize as opt
 
-def get_time(folder_path):
-    """
-    The method uses the folder_path that directly contains all the fits as a parameter.
 
-    Parameters:
-    ------------
-    folder_path (str): The path to the folder containing the DKIST .fits files
-
-    Returns:
-    ---------
-    tuple: A tuple containing the start and end times of the DKIST data in the folder
-    """
-    fits_files = [
-        filename for filename in os.listdir(folder_path)
-        if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
-    ]
-
-
-    first_path = os.path.join(folder_path, fits_files[0])
-    last_path = os.path.join(folder_path, fits_files[-1])
-
-
-    fits_header1 = fits.open(first_path)[1].header
-    fits_header2 = fits.open(last_path)[1].header
-   
-    return (fits_header1["DATE-AVG"], fits_header2["DATE-AVG"])
 
 
 class Config:
@@ -61,19 +35,39 @@ class Config:
         self.wavelength_index = wavelength_index
 
 
-class Data:
-    """
-    Class to hold the loaded HMI & DKIST data, as well as neccessary metadata
-    """
-
-    def __init__(self, cfg: Config):
-        self.cfg = cfg
-
 
 class DataLoader:
     """
     Loads the DKIST and HMI data, extracts neccessary info from headers or shapes, saves it to be used later
     """
+
+
+    def get_time(self, folder_path):
+        """
+        The method uses the folder_path that directly contains all the fits as a parameter.
+
+        Parameters:
+        ------------
+        folder_path (str): The path to the folder containing the DKIST .fits files
+
+        Returns:
+        ---------
+        tuple: A tuple containing the start and end times of the DKIST data in the folder
+        """
+        fits_files = [
+            filename for filename in os.listdir(folder_path)
+            if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
+        ]
+
+
+        first_path = os.path.join(folder_path, fits_files[0])
+        last_path = os.path.join(folder_path, fits_files[-1])
+
+
+        fits_header1 = fits.open(first_path)[1].header
+        fits_header2 = fits.open(last_path)[1].header
+    
+        return (fits_header1["DATE-AVG"], fits_header2["DATE-AVG"])
 
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -273,7 +267,7 @@ class Interpolator:
         ny = fixed_keywords['DNAXIS1']
 
         # initialize an empty array to fill with the coordinates. the shape is (nx, ny, 2) because we have nx by ny pixels and each pixel has an x and y coordinate.
-        coords_new = np.zeros((nx, ny, 2))
+        coords = np.zeros((nx, ny, 2))
 
 
         # loop through each fits file, extract the relevant header keywords, and calculate the coordinates for each pixel in that slit. then fill the coords_new array with those coordinates.
@@ -293,12 +287,12 @@ class Interpolator:
             slit_coords_y = crval1 + cdelt1 * (pc1_3 * (i - crpix3) + pc1_1 * (indices - crpix1))
 
             # save each pixel's coordinates into x and y indices of the the coords_new array. 
-            coords_new[i, :, 0] = slit_coords_x
-            coords_new[i, :, 1] = slit_coords_y
+            coords[i, :, 0] = slit_coords_x
+            coords[i, :, 1] = slit_coords_y
 
-        return coords_new
+        return coords
     
-    def identify_relevant_hmi_data(self, coords_new, hmix, hmiy, hmi_data, delta = 20):
+    def identify_relevant_hmi_data(self, coords, hmix, hmiy, hmi_data, delta = 20):
         """
         This function identifies the relevant HMI data that overlaps with the DKIST data, with a buffer of delta arcseconds on each side. 
         It returns the x and y coordinates of the relevant HMI data, as well as the intensity data.
@@ -318,8 +312,8 @@ class Interpolator:
         relavent_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
         """
         # construct a box of HMI coordinates and data around the DKIST data, with a buffer of delta arcseconds on each side. 
-        relavent_hmix_indices = sorted([np.argmin(np.abs(np.min(coords_new[:, :, 0]) - delta - hmix[0, :].value)), np.argmin(np.abs(np.max(coords_new[:, :, 0]) + delta - hmix[0, :].value))])
-        relavent_hmiy_indices = sorted([np.argmin(np.abs(np.min(coords_new[:, :, 1]) - delta - hmiy[:, 0].value)), np.argmin(np.abs(np.max(coords_new[:, :, 1]) + delta - hmiy[:, 0].value))])
+        relavent_hmix_indices = sorted([np.argmin(np.abs(np.min(coords[:, :, 0]) - delta - hmix[0, :].value)), np.argmin(np.abs(np.max(coords[:, :, 0]) + delta - hmix[0, :].value))])
+        relavent_hmiy_indices = sorted([np.argmin(np.abs(np.min(coords[:, :, 1]) - delta - hmiy[:, 0].value)), np.argmin(np.abs(np.max(coords[:, :, 1]) + delta - hmiy[:, 0].value))])
 
         # crop the x and y coordinates of the HMI data to the relevant coordinates. Note that the HMI data is transposed because the x and y coordinates are in the opposite order of the data array.
         relavent_hmix = hmix[0, relavent_hmix_indices[0]:relavent_hmix_indices[1]].value
@@ -330,7 +324,7 @@ class Interpolator:
 
         return relavent_hmix, relavent_hmiy, relavent_hmi_data
 
-    def interpolate_hmi_to_coords(self, relavent_hmix, relavent_hmiy, relavent_hmi_data, coords_new):
+    def interpolate_hmi_to_coords(self, relavent_hmix, relavent_hmiy, relavent_hmi_data, coords):
         """
         This function interpolates the relevant HMI data onto the DKIST coordinates. It returns a 2D array of the interpolated HMI data, with shape (nx, ny), where nx is the number of slits and ny is the number of pixels along the slit.
         
@@ -339,7 +333,7 @@ class Interpolator:
         relavent_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
         relavent_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
         relavent_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
-        coords_new (numpy.ndarray): a 3D array of the coordinates of the DKIST data, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
+        coords (numpy.ndarray): a 3D array of the coordinates of the DKIST data, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
         
         Returns:
         --------
@@ -358,7 +352,7 @@ class Interpolator:
         )
 
         # perform the interpolation onto whatever coordiantes you give it. Here, we give it the DKIST coordinates.
-        Z_fine = grid_interpolator((coords_new[:, :, 1], coords_new[:, :, 0]))
+        Z_fine = grid_interpolator((coords[:, :, 1], coords[:, :, 0]))
 
         return Z_fine
 
@@ -373,10 +367,17 @@ class Alignment:
 
 
 if __name__ == "__main__":
+
+    """
+    Placeholder code to test that the funcitons work: 
+    """
     
+    path_to_dkist_data = '/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY/'
+    path_to_sunpy = "~/sunpy/data/"
+
     cfg = Config(
-    path_to_dkist_data='/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY/', 
-    path_to_sunpy="~/sunpy/data/", 
+    path_to_dkist_data=path_to_dkist_data, 
+    path_to_sunpy=path_to_sunpy, 
     wavelength_index=30, 
     verbose=True
     )
@@ -384,22 +385,30 @@ if __name__ == "__main__":
     loader = DataLoader(cfg)
 
 
-    raster, x, y = loader.load_dkist_slits()
+    times = loader.get_time(cfg.path_to_dkist_data)
+    print("Start time:", times[0])
+    print("End time:", times[1])
 
-    print(raster.shape)
+    intensity_map = loader.get_dkist_wavelengths()
+    fixed_keywords, changing_keywords, fits_files = loader.get_dkist_headers()
 
-    wave_index = 30  
-    spatial_map = raster[:, wave_index, :]
+    interpolator = Interpolator(cfg)
+
+    coordinates = interpolator.construct_dkist_coords(fixed_keywords, changing_keywords)
+    x = coordinates[:, :, 0]
+    y = coordinates[:, :, 1]
+
+    print(intensity_map.shape)
 
     plt.figure(figsize=(12, 4))
 
 
-    img = plt.pcolormesh(x, y, spatial_map, shading='auto', cmap='magma', aspect='equal')
+    img = plt.pcolormesh(x, y, intensity_map, shading='auto', cmap='magma', aspect='equal')
 
     plt.colorbar(img, label='Intensity')
     plt.xlabel('Spatial Y Axis (2556 channels / Arcseconds)')
     plt.ylabel('Spatial X Axis (200 channels / Arcseconds)')
-    plt.title(f'Monochromatic Spatial Map at Wavelength Index {wave_index}')
+    plt.title(f'Monochromatic Spatial Map at Wavelength Index {cfg.wavelength_index}')
     plt.show()
 
     print("done")
