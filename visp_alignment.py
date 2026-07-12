@@ -41,6 +41,8 @@ class DataLoader:
     Loads the DKIST and HMI data, extracts neccessary info from headers or shapes, saves it to be used later
     """
 
+    def __init__(self, cfg: Config):
+        self.cfg = cfg
 
     def get_time(self, folder_path):
         """
@@ -68,9 +70,6 @@ class DataLoader:
         fits_header2 = fits.open(last_path)[1].header
     
         return (fits_header1["DATE-AVG"], fits_header2["DATE-AVG"])
-
-    def __init__(self, cfg: Config):
-        self.cfg = cfg
 
     def load_hmi(self, start_time: Time, end_time: Time):
         """
