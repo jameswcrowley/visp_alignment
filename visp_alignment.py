@@ -44,26 +44,22 @@ class DataLoader:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def get_time(self, folder_path):
+    def get_time(self):
         """
-        The method uses the folder_path that directly contains all the fits as a parameter.
-
-        Parameters:
-        ------------
-        folder_path (str): The path to the folder containing the DKIST .fits files
+        The method uses the path_to_dkist_data from the configuration to locate the DKIST .fits files.
 
         Returns:
         ---------
         tuple: A tuple containing the start and end times of the DKIST data in the folder
         """
         fits_files = [
-            filename for filename in os.listdir(folder_path)
-            if filename.endswith('.fits') and os.path.isfile(os.path.join(folder_path, filename))
+            filename for filename in sorted(os.listdir(self.cfg.path_to_dkist_data))
+            if filename.endswith('.fits') and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename)) and '_I_' in filename
         ]
 
 
-        first_path = os.path.join(folder_path, fits_files[0])
-        last_path = os.path.join(folder_path, fits_files[-1])
+        first_path = os.path.join(self.cfg.path_to_dkist_data, fits_files[0])
+        last_path = os.path.join(self.cfg.path_to_dkist_data, fits_files[-1])
 
 
         fits_header1 = fits.open(first_path)[1].header
@@ -120,9 +116,6 @@ class DataLoader:
         print(f'Dataset loaded from {asdf_path} with shape {ds[:, :, :, :].data.shape}')
         all_data = np.array(ds[0, :, :, :].data) # load all slits and wavelenghths of the dataset across the first Stokes parameter
 
-        #slit1_data = all_data[0, :, :] # data of all wavelengths across the first slit
-        #print(f'Data shape: {slit1_data.shape}')
-
         median_wavelength_data = np.nanmedian(all_data, axis = (0, 2)) # median spectra for all slits and positions along slits
 
         threshold = np.percentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
@@ -165,8 +158,9 @@ class DataLoader:
         """
         fits_files = [
             filename for filename in sorted(os.listdir(self.cfg.path_to_dkist_data))
-            if filename.endswith('.fits') and "_I_" in filename and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename))
+            if filename.endswith('.fits') and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename)) and '_I_' in filename
         ]
+        
         header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
         fixed_keywords = {
             "CDELT1": header["CDELT1"],
