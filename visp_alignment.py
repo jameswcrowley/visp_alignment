@@ -164,7 +164,7 @@ class DataLoader:
         changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
         fits_files = [
-            filename for filename in os.listdir(self.cfg.path_to_dkist_data)
+            filename for filename in sorted(os.listdir(self.cfg.path_to_dkist_data))
             if filename.endswith('.fits') and "_I_" in filename and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename))
         ]
         header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
