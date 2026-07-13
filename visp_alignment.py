@@ -114,62 +114,27 @@ class DataLoader:
         ----------
         mean_data(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
         """
+        # TODO: add handling if there aren't multiple Stokes components in the dataset
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
-        all_data = np.array(ds[0, :, :, :].data)
+        print(f'Dataset loaded from {asdf_path} with shape {ds[:, :, :, :].data.shape}')
+        all_data = np.array(ds[0, :, :, :].data) # load all slits and wavelenghths of the dataset across the first Stokes parameter
 
-        slit1_data = all_data[0, :, :] #data of all wavelengths across the first slit
-        print(slit1_data.shape)
+        #slit1_data = all_data[0, :, :] # data of all wavelengths across the first slit
+        #print(f'Data shape: {slit1_data.shape}')
 
-        median_data = np.array([]) #median of each wavelength sample across the first slit
-        for i in range(slit1_data.shape[0]):
-            median_data = np.append(median_data, np.nanmedian(slit1_data[i, :]))
-        print(median_data)
+        median_wavelength_data = np.nanmedian(all_data, axis = (0, 2)) # median spectra for all slits and positions along slits
 
-        threshold = np.percentile(median_data, 95) #95th percentile of the median values
-        indicies = np.where(median_data > threshold)[0] #gets the indicies of the median values above the threshold
-        print(indicies)
+        threshold = np.percentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
+        wavelength_indicies = np.where(median_wavelength_data > threshold)[0] # gets the indicies of the median spectra is above the threshold
  
-        relevant_data = all_data[:, indicies, :] #gets the data of all wavelengths across all slits for the indicies above the threshold
-        # for i in indicies:
-        #     data = np.append(data, np.array(ds[0, :, i, :].data))
-        print(relevant_data)
+        relevant_data = all_data[:, wavelength_indicies, :] # gets the data of all wavelengths across all slits for the indicies above the threshold
+        print(50 * '-')
+        print(relevant_data.shape)
+        print(50 * '-')
 
-
-        mean_data = np.nanmean(relevant_data, axis = 0) #mean of the data across the wavelength samples above the threshold
+        mean_data = np.nanmean(relevant_data, axis = 1) # mean of the data across the wavelength samples above the threshold
         return mean_data 
-
-        # data = np.asarray(ds.data)
-        # if data.ndim == 0:
-        #     raise ValueError("The DKIST dataset did not contain any data")
-
-        # wavelength_axis = None
-        # for axis, axis_name in enumerate(getattr(ds, "world_axis_physical_types", [])):
-        #     if axis_name is not None and ("wavelength" in axis_name.lower() or "em.wl" in axis_name.lower()):
-        #         wavelength_axis = axis
-        #         break
-
-        # if wavelength_axis is None:
-        #     wavelength_axis = 1 if data.ndim > 1 else 0
-
-        # wavelength_data = np.moveaxis(data, wavelength_axis, 0)
-        # wavelength_data = wavelength_data[:30]
-        # intensity_map = np.nanmean(wavelength_data, axis=0)
-        # intensity_map = np.squeeze(intensity_map)
-
-        # if intensity_map.ndim > 2:
-        #     intensity_map = np.nanmean(
-        #         intensity_map,
-        #         axis=tuple(range(intensity_map.ndim - 2)),
-        #     )
-
-        # if intensity_map.ndim != 2:
-        #     raise ValueError(
-        #         f"Expected a 2D intensity map, but received shape {intensity_map.shape}"
-        #     )
-
-        # return intensity_map
-
     
     def get_dkist_wavelengths2(self):
         """
@@ -402,7 +367,7 @@ if __name__ == "__main__":
     plt.figure(figsize=(12, 4))
 
 
-    img = plt.pcolormesh(x, y, intensity_map, shading='auto', cmap='magma', aspect='equal')
+    img = plt.pcolormesh(x, y, intensity_map, shading='auto', cmap='magma')
 
     plt.colorbar(img, label='Intensity')
     plt.xlabel('Spatial Y Axis (2556 channels / Arcseconds)')
