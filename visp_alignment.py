@@ -322,7 +322,7 @@ class Alignment:
 
         return hMI_interpolated_to_coords
 
-    def loss_function(self, parameters, fixed_keywords, changing_keywords, hmix, hmiy, hmi_data, data_numpy):
+    def loss_function(self, parameters, fixed_keywords, changing_keywords, relevant_hmix, relevant_hmiy, relevant_hmi_data, data_numpy):
         """
         This function calculates the loss between the interpolated HMI data and the DKIST data.
         It returns the loss value - here, I chose to use the sum of squared differences to quantify the difference between the two datasets, but other metrics could be used as well.
@@ -343,7 +343,6 @@ class Alignment:
         """
         # shift the DKIST coordinates based on the input parameters, identify the relevant HMI data that overlaps with the DKIST data, and interpolate the HMI data onto the DKIST coordinates.
         coords_new = self.construct_dkist_coords(fixed_keywords, changing_keywords, parameters)
-        relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
 
         # TODO: I think we should crop ONCE in a larger area around DKIST coords, and then pass it in once, not update the crop for every interpolation.
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(relevant_hmix, relevant_hmiy, relevant_hmi_data, coords_new)
@@ -404,8 +403,6 @@ if __name__ == "__main__":
 
     original_dkist_coords = alignment.construct_dkist_coords(fixed, changing)
 
-    relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(original_dkist_coords, hmix, hmiy, hmi_data)
-
     # Minimize
 
     print("ALIGNING")
@@ -413,8 +410,11 @@ if __name__ == "__main__":
     initial_guess = [-15, 15, 0, 0, 0, 0]
     bounds = [(-20, -10), (0, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
 
+    coords_new = alignment.construct_dkist_coords(fixed, changing, initial_guess)
+    relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
+
     if run:
-        result = opt.minimize(alignment.loss_function, initial_guess, args=(fixed, changing, hmix, hmiy, hmi_data, intensities), bounds=bounds, method='Powell', options={'maxiter': 200, 'disp': True})
+        result = opt.minimize(alignment.loss_function, initial_guess, args=(fixed, changing, relevant_hmix, relevant_hmiy, relevant_hmi_data, intensities), bounds=bounds, method='Powell', options={'maxiter': 200, 'disp': True})
         best_parameters = result.x
 
         print('Optimization converged:', result.success)
