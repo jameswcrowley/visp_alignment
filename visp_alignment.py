@@ -13,6 +13,7 @@ import dkist
 import os
 from scipy import interpolate as interp
 import scipy.optimize as opt
+from xarray import corr
 
 class Config:
     """
@@ -32,6 +33,8 @@ class Config:
         self.wavelength_index = wavelength_index
 
 
+
+# TODO: I think it would be good to add a class for holding data to clean up the code. But we can defer this for now and focus on getting the alignment working first.
 
 class DataLoader:
     """
@@ -86,6 +89,8 @@ class DataLoader:
         )
 
         # read in the middle file using scipy.map to extract the coordinates and data.
+        # TODO: switch to reading in the middle file of the search results instead of always taking the first one.
+        # TODO: also need to eventually read in all HMI files 
         hmi = map.Map(hmi_files[0])
 
         # read in the x and y coordinates as seperate arrays.
@@ -169,6 +174,8 @@ class DataLoader:
             "PC3_1": header["PC3_1"],
             "PC3_3": header["PC3_3"]
         }
+
+        # TODO: I did some research and found it would be more efficient to store these as numpy arrays, not Python lists.
         changing_keywords = {
             "CRVAL1": [],
             "CRVAL3": [],
@@ -210,7 +217,10 @@ class Alignment:
         coords_new (numpy.ndarray): a 3D array of the coordinates, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
         """
 
-        crval1_shift, crval3_shift, pc1_1_shift, pc3_1_shift, pc1_3_shift, pc3_3_shift = parameters
+        # TODO: pci_j's should be constrained so that the transformation matrix is invertable -> physically meaningful. We should switch to dx, dy, and rotation angles instead of directly manipulating the pci_j's.
+        crval1_shift, crval3_shift, dx, dy, theta = parameters
+
+
 
         cdelt1 = fixed_keywords['CDELT1']
         cdelt3 = fixed_keywords['CDELT3']
@@ -228,6 +238,8 @@ class Alignment:
 
 
         # loop through each fits file, extract the relevant header keywords, and calculate the coordinates for each pixel in that slit. then fill the coords_new array with those coordinates.
+
+        # TODO: this should be possible to vectorize instead of using a for loop, which would likely be MUCH faster for large datasets.
         for i in range(nx):
             crval1 = changing_keywords['CRVAL1'][i]
             crval3 = changing_keywords['CRVAL3'][i]
@@ -300,6 +312,7 @@ class Alignment:
         # I don't know if this is the final method we'll use but it is a working example.
         
         # set up the interpolator:
+        # TODO: should be much faster if we construct the interpolator ONCE and then feed in new coordinates, not reconstruct it every time we call this function.
         grid_interpolator = interp.RegularGridInterpolator(
             (relevant_hmiy, relevant_hmix),
             relevant_hmi_data, 
@@ -335,10 +348,13 @@ class Alignment:
         # shift the DKIST coordinates based on the input parameters, identify the relevant HMI data that overlaps with the DKIST data, and interpolate the HMI data onto the DKIST coordinates.
         coords_new = self.construct_dkist_coords(fixed_keywords, changing_keywords, parameters)
         relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
+
+        # TODO: I think we should crop ONCE in a larger area around DKIST coords, and then pass it in once, not update the crop for every interpolation.
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(relevant_hmix, relevant_hmiy, relevant_hmi_data, coords_new)
 
         # double-check the data is normalized so it can be better compared.
          
+        # TODO: update this so that it does not modify the original arrays in-place, which could affect subsequent calculations. Consider creating copies before normalizing.
         HMI_interpolated_to_coords -= np.nanmean(HMI_interpolated_to_coords)
         HMI_interpolated_to_coords /= np.nanstd(HMI_interpolated_to_coords)
         HMI_interpolated_to_coords /= np.nanmax(HMI_interpolated_to_coords)
