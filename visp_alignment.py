@@ -260,7 +260,6 @@ class Alignment:
         nx = fixed_keywords['DNAXIS3']
         ny = fixed_keywords['DNAXIS1']
 
-        # initialize an empty array to fill with the coordinates. the shape is (nx, ny, 2) because we have nx by ny pixels and each pixel has an x and y coordinate.
         coords = np.zeros((nx, ny, 2))
 
         i = np.arange(nx)[:, None] + 1
@@ -272,9 +271,9 @@ class Alignment:
         crpix1 = np.asarray(changing_keywords["CRPIX1"])[:nx, None]
         crpix3 = np.asarray(changing_keywords["CRPIX3"])[:nx, None]
 
-        x = (crval3 + cdelt3 * (pc3_3 * (i - crpix3)+ pc3_1 * (j - crpix1)))
+        x = (crval3 + crval3_shift) + cdelt3 * ((pc3_3 + pc3_3_shift) * (i - (crpix3)) + (pc3_1 + pc3_1_shift) * (j - (crpix1)))
 
-        y = (crval1 + cdelt1 * (pc1_3 * (i - crpix3) + pc1_1 * (j - crpix1)))
+        y = (crval1 + crval1_shift) + cdelt1 * ((pc1_3 + pc1_3_shift) * (i - (crpix3)) + (pc1_1 + pc1_1_shift) * (j - (crpix1)))
 
         coords[:, :, 0] = x
         coords[:, :, 1] = y
@@ -421,8 +420,7 @@ if __name__ == "__main__":
 
     print("Run =", run)
     
-    #path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
-    path_to_dkist_data = '/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY/'
+    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
 
     # path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
@@ -489,6 +487,6 @@ if __name__ == "__main__":
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], loader.intensities - final_HMI_interpolated_onto_coords, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
     plt.colorbar()
 
-    plt.show()
-
     print("DONE")
+
+    plt.show()
