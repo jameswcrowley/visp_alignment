@@ -13,7 +13,6 @@ import dkist
 import os
 from scipy import interpolate as interp
 import scipy.optimize as opt
-from xarray import corr
 
 class Config:
     """
@@ -365,6 +364,8 @@ class Alignment:
 
         # calculate the loss between the interpolated HMI data and the DKIST data. this could be something like mean squared error or mean absolute error. 
         # I think eventually, we want to switch to the cross-correlation function to quantify the difference between the two datasets, but for now, this is a simple example.
+
+        # TODO: move to cross correlation
         loss = np.nansum((HMI_interpolated_to_coords - data_numpy)**2)
 
         return loss
