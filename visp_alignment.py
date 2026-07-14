@@ -90,7 +90,7 @@ class DataLoader:
         # read in the middle file using scipy.map to extract the coordinates and data.
         # TODO: switch to reading in the middle file of the search results instead of always taking the first one.
         # TODO: also need to eventually read in all HMI files 
-        hmi = map.Map(hmi_files[0])
+        hmi = map.Map(hmi_files[len(hmi_files)//2])
 
         # read in the x and y coordinates as seperate arrays.
         hmix = map.all_coordinates_from_map(hmi).Tx
@@ -235,28 +235,46 @@ class Alignment:
         # initialize an empty array to fill with the coordinates. the shape is (nx, ny, 2) because we have nx by ny pixels and each pixel has an x and y coordinate.
         coords = np.zeros((nx, ny, 2))
 
+        # print(nx)
+        i = np.arange(nx)[:, None] + 1
+        j = np.arange(ny)[None, :] + 1
+
+        #TODO: Figure out what to do about raster repeats
+        crval1 = np.asarray(changing_keywords["CRVAL1"])[:nx, None]
+        crval3 = np.asarray(changing_keywords["CRVAL3"])[:nx, None]
+        crpix1 = np.asarray(changing_keywords["CRPIX1"])[:nx, None]
+        crpix3 = np.asarray(changing_keywords["CRPIX3"])[:nx, None]
+        # print(crval1.shape, crval3.shape, crpix1.shape, crpix3.shape, i.shape, j.shape)
+
+        x = (crval3 + cdelt3 * (pc3_3 * (i - crpix3)+ pc3_1 * (j - crpix1)))
+
+        y = (crval1 + cdelt1 * (pc1_3 * (i - crpix3) + pc1_1 * (j - crpix1)))
+
+        coords[:, :, 0] = x
+        coords[:, :, 1] = y
+
 
         # loop through each fits file, extract the relevant header keywords, and calculate the coordinates for each pixel in that slit. then fill the coords_new array with those coordinates.
 
         # TODO: this should be possible to vectorize instead of using a for loop, which would likely be MUCH faster for large datasets.
-        for i in range(nx):
-            crval1 = changing_keywords['CRVAL1'][i]
-            crval3 = changing_keywords['CRVAL3'][i]
+        # for i in range(nx):
+        #     crval1 = changing_keywords['CRVAL1'][i]
+        #     crval3 = changing_keywords['CRVAL3'][i]
 
-            crpix1 = changing_keywords['CRPIX1'][i]
-            crpix3 = changing_keywords['CRPIX3'][i]
+        #     crpix1 = changing_keywords['CRPIX1'][i]
+        #     crpix3 = changing_keywords['CRPIX3'][i]
 
-            # y-index of the position of the pixel ALONG the slit (i.e. 1 to ny). This is used to calculate the coordinates of each pixel along the slit.
-            indices = np.linspace(1, ny, ny, dtype = int)
+        #     # y-index of the position of the pixel ALONG the slit (i.e. 1 to ny). This is used to calculate the coordinates of each pixel along the slit.
+        #     indices = np.linspace(1, ny, ny, dtype = int)
 
-            # calculate the coordinates of each pixel along the slit using the header keywords and the y-index. 
-            # This formula is the linear transformation-matrix form of the coordinate assembly.
-            slit_coords_x = (crval3 + crval3_shift) + cdelt3 * ((pc3_3 + pc3_3_shift) * (i - (crpix3)) + (pc3_1 + pc3_1_shift) * (indices - (crpix1)))
-            slit_coords_y = (crval1 + crval1_shift) + cdelt1 * ((pc1_3 + pc1_3_shift) * (i - (crpix3)) + (pc1_1 + pc1_1_shift) * (indices - (crpix1)))
+        #     # calculate the coordinates of each pixel along the slit using the header keywords and the y-index. 
+        #     # This formula is the linear transformation-matrix form of the coordinate assembly.
+        #     slit_coords_x = (crval3 + crval3_shift) + cdelt3 * ((pc3_3 + pc3_3_shift) * (i - (crpix3)) + (pc3_1 + pc3_1_shift) * (indices - (crpix1)))
+        #     slit_coords_y = (crval1 + crval1_shift) + cdelt1 * ((pc1_3 + pc1_3_shift) * (i - (crpix3)) + (pc1_1 + pc1_1_shift) * (indices - (crpix1)))
 
-            # save each pixel's coordinates into x and y indices of the the coords_new array. 
-            coords[i, :, 0] = slit_coords_x
-            coords[i, :, 1] = slit_coords_y
+        #     # save each pixel's coordinates into x and y indices of the the coords_new array. 
+        #     coords[i, :, 0] = slit_coords_x
+        #     coords[i, :, 1] = slit_coords_y
 
         return coords
     
