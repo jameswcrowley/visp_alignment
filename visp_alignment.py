@@ -82,8 +82,7 @@ class DataLoader:
         )
 
         # read in the middle file using scipy.map to extract the coordinates and data.
-        # TODO: switch to reading in the middle file of the search results instead of always taking the first one.
-        # TODO: also need to eventually read in all HMI files 
+        # TODO: eventually need to read in all HMI files 
         hmi = map.Map(hmi_files[len(hmi_files)//2])
 
         # read in the x and y coordinates as seperate arrays.
@@ -184,8 +183,6 @@ class DataLoader:
             "PC3_1": header["PC3_1"],
             "PC3_3": header["PC3_3"]
         }
-
-        # TODO: I did some research and found it would be more efficient to store these as numpy arrays, not Python lists.
         changing_keywords = {
             "CRVAL1": [],
             "CRVAL3": [],
@@ -204,13 +201,35 @@ class DataLoader:
         return fixed_keywords, changing_keywords, fits_files
         
 
+    def load(self):
+        """
+        Main for the DataLoader class.
+
+        Returns:
+        --------
+        fixed_keywords(dict): A dictionary of fixed keywords {key: value}
+        changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
+        fits_files(list): A list of the fits files in the DKIST data folder
+        intensities(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
+        hmix(numpy.ndarray): the x coordinates of the HMI data
+        hmiy(numpy.ndarray): the y coordinates of the HMI data
+        hmi_data(numpy.ndarray): the intensity data of the HMI data
+        """
+
+        self.fixed_keywords, self.changing_keywords, self.fits_files = self.get_dkist_headers()
+        self.start_time, self.end_time = self.get_time(self.changing_keywords)
+        self.intensities = self.get_dkist_wavelengths()
+
+        self.hmix, self.hmiy, self.hmi_data, self.time = self.load_hmi(Time(self.start_time), Time(self.end_time))
+
 class Alignment:
     """
     Takes an instance of the Data class and interpolates the HMI data to the resolution / pixel grid of DKIST
     """
 
-    def __init__(self, cfg: Config):
+    def __init__(self, cfg: Config, data_loader: DataLoader):
         self.cfg = cfg
+        self.data_loader = data_loader
     
     def construct_dkist_coords(self, fixed_keywords, changing_keywords, parameters = (0, 0, 0, 0, 0, 0)):
         """
@@ -233,26 +252,24 @@ class Alignment:
         cdelt1 = fixed_keywords['CDELT1']
         cdelt3 = fixed_keywords['CDELT3']
 
-        pc1_1 = fixed_keywords['PC1_1']
-        pc1_3 = fixed_keywords['PC1_3']
-        pc3_1 = fixed_keywords['PC3_1']
-        pc3_3 = fixed_keywords['PC3_3']
+        pc1_1 = fixed_keywords['PC1_1'] + pc1_1_shift
+        pc1_3 = fixed_keywords['PC1_3'] + pc1_3_shift
+        pc3_1 = fixed_keywords['PC3_1'] + pc3_1_shift
+        pc3_3 = fixed_keywords['PC3_3'] + pc3_3_shift
 
         nx = fixed_keywords['DNAXIS3']
         ny = fixed_keywords['DNAXIS1']
 
         coords = np.zeros((nx, ny, 2))
 
-        # print(nx)
         i = np.arange(nx)[:, None] + 1
         j = np.arange(ny)[None, :] + 1
 
         #TODO: Figure out what to do about raster repeats
-        crval1 = np.asarray(changing_keywords["CRVAL1"])[:nx, None]
-        crval3 = np.asarray(changing_keywords["CRVAL3"])[:nx, None]
+        crval1 = np.asarray(changing_keywords["CRVAL1"])[:nx, None] + crval1_shift
+        crval3 = np.asarray(changing_keywords["CRVAL3"])[:nx, None] + crval3_shift
         crpix1 = np.asarray(changing_keywords["CRPIX1"])[:nx, None]
         crpix3 = np.asarray(changing_keywords["CRPIX3"])[:nx, None]
-        # print(crval1.shape, crval3.shape, crpix1.shape, crpix3.shape, i.shape, j.shape)
 
         x = (crval3 + crval3_shift) + cdelt3 * ((pc3_3 + pc3_3_shift) * (i - (crpix3)) + (pc3_1 + pc3_1_shift) * (j - (crpix1)))
 
@@ -260,29 +277,6 @@ class Alignment:
 
         coords[:, :, 0] = x
         coords[:, :, 1] = y
-
-
-        # loop through each fits file, extract the relevant header keywords, and calculate the coordinates for each pixel in that slit. then fill the coords_new array with those coordinates.
-
-        # TODO: this should be possible to vectorize instead of using a for loop, which would likely be MUCH faster for large datasets.
-        # for i in range(nx):
-        #     crval1 = changing_keywords['CRVAL1'][i]
-        #     crval3 = changing_keywords['CRVAL3'][i]
-
-        #     crpix1 = changing_keywords['CRPIX1'][i]
-        #     crpix3 = changing_keywords['CRPIX3'][i]
-
-        #     # y-index of the position of the pixel ALONG the slit (i.e. 1 to ny). This is used to calculate the coordinates of each pixel along the slit.
-        #     indices = np.linspace(1, ny, ny, dtype = int)
-
-        #     # calculate the coordinates of each pixel along the slit using the header keywords and the y-index. 
-        #     # This formula is the linear transformation-matrix form of the coordinate assembly.
-        #     slit_coords_x = (crval3 + crval3_shift) + cdelt3 * ((pc3_3 + pc3_3_shift) * (i - (crpix3)) + (pc3_1 + pc3_1_shift) * (indices - (crpix1)))
-        #     slit_coords_y = (crval1 + crval1_shift) + cdelt1 * ((pc1_3 + pc1_3_shift) * (i - (crpix3)) + (pc1_1 + pc1_1_shift) * (indices - (crpix1)))
-
-        #     # save each pixel's coordinates into x and y indices of the the coords_new array. 
-        #     coords[i, :, 0] = slit_coords_x
-        #     coords[i, :, 1] = slit_coords_y
 
         return coords
     
@@ -317,6 +311,32 @@ class Alignment:
         relevant_hmi_data= hmi_data.T[relevant_hmix_indices[0]:relevant_hmix_indices[1], relevant_hmiy_indices[0]:relevant_hmiy_indices[1]].T
 
         return relevant_hmix, relevant_hmiy, relevant_hmi_data
+    
+    def construct_interpolator(self, relevant_hmix, relevant_hmiy, relevant_hmi_data):
+        """
+        This function constructs a RegularGridInterpolator object from the relevant HMI data. It returns the interpolator object.
+
+        Parameters:
+        -----------
+        relevant_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
+        relevant_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
+        relevant_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
+
+        Returns:
+        --------
+        interpolator (scipy.interpolate.RegularGridInterpolator): a RegularGridInterpolator object that can be used to interpolate the relevant HMI data onto any set of coordinates.
+        """
+
+        interpolator = interp.RegularGridInterpolator(
+            (relevant_hmiy, relevant_hmix),
+            relevant_hmi_data, 
+            method='cubic',
+            bounds_error=False, 
+            fill_value=np.nan
+        )
+
+        return interpolator
+        
 
     def interpolate_hmi_to_coords(self, interpolator, coords):
         """
@@ -324,24 +344,18 @@ class Alignment:
         
         Parameters:
         -----------
-        relevant_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
-        relevant_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
-        relevant_hmi_data (numpy.ndarray): the intensity data of the relevant HMI data.
+        interpolator (scipy.interpolate.RegularGridInterpolator): a RegularGridInterpolator object that can be used to interpolate the relevant HMI data onto any set of coordinates.
         coords (numpy.ndarray): a 3D array of the coordinates of the DKIST data, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
         
         Returns:
         --------
         Z_fine (numpy.ndarray): a 2D array of the interpolated HMI data, with shape (nx, ny), where nx is the number of slits and ny is the number of pixels along the slit.
         """
-        # an example of one way to interpolate the HMI data onto the DKIST coordinates. 
-        # I don't know if this is the final method we'll use but it is a working example.
-        
-        # perform the interpolation onto whatever coordiantes you give it. Here, we give it the DKIST coordinates.
-        hMI_interpolated_to_coords = interpolator((coords[:, :, 1], coords[:, :, 0]))
+        HMI_interpolated_to_coords = interpolator((coords[:, :, 1], coords[:, :, 0]))
 
-        return hMI_interpolated_to_coords
+        return HMI_interpolated_to_coords
 
-    def loss_function(self, parameters, fixed_keywords, changing_keywords, data_numpy, interpolator):
+    def loss_function(self, parameters, data_numpy, interpolator):
         """
         This function calculates the loss between the interpolated HMI data and the DKIST data.
         It returns the loss value - here, I chose to use the sum of squared differences to quantify the difference between the two datasets, but other metrics could be used as well.
@@ -349,11 +363,7 @@ class Alignment:
         Parameters:
         -----------
         parameters (tuple): a tuple of the parameters to modify the crval and pc values.
-        path_to_local_fits (str): the path to the local fits files.
-        all_fits (list): a list of the fits files to load in.
-        hmix (numpy.ndarray): the x coordinates of the HMI data.
-        hmiy (numpy.ndarray): the y coordinates of the HMI data.
-        hmi_data (numpy.ndarray): the intensity data of the HMI data.
+        interpolator (scipy.interpolate.RegularGridInterpolator): a RegularGridInterpolator object that can be used to interpolate the relevant HMI data onto any set of coordinates.
         data_numpy (numpy.ndarray): the DKIST data.
 
         Returns:
@@ -361,7 +371,7 @@ class Alignment:
         loss (float): the loss value between the interpolated HMI data and the DKIST data.
         """
         # shift the DKIST coordinates based on the input parameters, identify the relevant HMI data that overlaps with the DKIST data, and interpolate the HMI data onto the DKIST coordinates.
-        coords_new = self.construct_dkist_coords(fixed_keywords, changing_keywords, parameters)
+        coords_new = self.construct_dkist_coords(self.data_loader.fixed_keywords, self.data_loader.changing_keywords, parameters)
 
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(interpolator, coords_new)
 
@@ -372,11 +382,41 @@ class Alignment:
         loss = np.nansum((HMI_interpolated_to_coords - data_numpy)**2)
 
         return loss
+    
+    def align(self, initial_guess, bounds):
+        """
+        This function performs the optimization to find the best parameters to align the DKIST data with the HMI data.
+        It returns the best parameters found by the optimization.
+
+        Parameters:
+        -----------
+        initial_guess (tuple): a tuple of the initial guess for the parameters to modify the crval and pc values.
+        bounds (list): a list of tuples specifying the bounds for each parameter.
+
+        Returns:
+        --------
+        best_parameters (tuple): a tuple of the best parameters found by the optimization.
+        """
+
+        initial_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, self.data_loader.changing_keywords, initial_guess)
+        relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(initial_coordinates, self.data_loader.hmix, self.data_loader.hmiy, self.data_loader.hmi_data)
+        interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+        
+        result = opt.minimize(self.loss_function, 
+                              initial_guess, 
+                              args=(self.data_loader.intensities, interpolator), 
+                              bounds=bounds, 
+                              method='Powell', 
+                              options={'maxiter': 200, 'disp': True})
+
+        best_parameters = result.x
+        
+        return best_parameters, result.success
 
 
 if __name__ == "__main__":
 
-    run = False
+    run = True
 
     print("Run =", run)
     
@@ -394,44 +434,21 @@ if __name__ == "__main__":
     )
 
     # Load and prepare  
-
     print("LOADING DATA")
-
     loader = DataLoader(cfg)
-
-    fixed, changing, fits_files = loader.get_dkist_headers()
-
-    intensities = loader.get_dkist_wavelengths2()
-
-    hmix, hmiy, hmi_data, time = loader.load_hmi(Time(changing["DATE-AVG"][0]), Time(changing["DATE-AVG"][4]))
-
-    alignment = Alignment(cfg)
-
-    original_dkist_coords = alignment.construct_dkist_coords(fixed, changing)
+    loader.load()
 
     # Minimize
-
     print("ALIGNING")
-
     initial_guess = [-15, 15, 0, 0, 0, 0]
-    bounds = [(-20, -10), (0, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
-
-    coords_new = alignment.construct_dkist_coords(fixed, changing, initial_guess)
-    relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
-
-    interpolator = interp.RegularGridInterpolator(
-            (relevant_hmiy, relevant_hmix),
-            relevant_hmi_data, 
-            method='cubic',
-            bounds_error=False, 
-            fill_value=np.nan
-    )
+    bounds = [(-20, -5), (0, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
+    alignment = Alignment(cfg, loader)
+    original_dkist_coords = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, [-15, 15, 0, 0, 0, 0])
 
     if run:
-        result = opt.minimize(alignment.loss_function, initial_guess, args=(fixed, changing, intensities, interpolator), bounds=bounds, method='Powell', options={'maxiter': 200, 'disp': True})
-        best_parameters = result.x
+        best_parameters, success = alignment.align(initial_guess, bounds)
 
-        print('Optimization converged:', result.success)
+        print('Optimization converged:', success)
         print('Best parameters found:', best_parameters)
 
     else:
@@ -439,43 +456,35 @@ if __name__ == "__main__":
 
     # assemble final coordinates
 
-    coords_new = alignment.construct_dkist_coords(fixed, changing, best_parameters)
-    relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
-    interpolator = interp.RegularGridInterpolator(
-            (relevant_hmiy, relevant_hmix),
-            relevant_hmi_data, 
-            method='cubic',
-            bounds_error=False, 
-            fill_value=np.nan
-    )
-    Z_fine = alignment.interpolate_hmi_to_coords(interpolator, coords_new)
+    coords_new = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, best_parameters)
+    relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, loader.hmix, loader.hmiy, loader.hmi_data)
+    interpolator = alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+    
+    final_HMI_interpolated_onto_coords = alignment.interpolate_hmi_to_coords(interpolator, coords_new)
 
-    # plt.figure(figsize = [12, 10])
-    # plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    # plt.pcolormesh(assembled_dkist_coords[:, :, 0], assembled_dkist_coords[:, :, 1], intensities, cmap = 'plasma', alpha=1)
-
-    plt.figure(figsize = [25, 8])
+    plt.figure(figsize = [10, 10])
     plt.subplot(2,2,1)
     plt.title('Original DKIST data overlayed over original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], intensities, cmap = 'plasma')
+    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap = 'plasma')
+    plt.colorbar()
 
     plt.subplot(2,2,2)
     plt.title('New (interpolated) HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], Z_fine, cmap = 'plasma')
+    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], final_HMI_interpolated_onto_coords, cmap = 'plasma')
     plt.colorbar()
 
     plt.subplot(2,2,3)
     plt.title('Aligned DKIST data overlaid on original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities, cmap = 'plasma', alpha = 1)
+    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 1)
     plt.colorbar()
 
     plt.subplot(2,2,4)
     plt.title('Difference between DKIST and HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities - Z_fine, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
+    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], loader.intensities - final_HMI_interpolated_onto_coords, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
     plt.colorbar()
 
     print("DONE")
