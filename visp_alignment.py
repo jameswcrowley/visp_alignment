@@ -153,10 +153,7 @@ class DataLoader:
         fixed_keywords(dict): A dictionary of fixed keywords {key: value}
         changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
-        fits_files = [
-            filename for filename in sorted(os.listdir(self.cfg.path_to_dkist_data))
-            if filename.endswith('.fits') and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename)) and '_I_' in filename
-        ]
+        fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x]
         
         header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
         fixed_keywords = {
@@ -349,7 +346,7 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = False
+    run = True
 
     print("Run =", run)
     
@@ -363,7 +360,7 @@ if __name__ == "__main__":
     verbose=True
     )
 
-    # Load and prepare
+    # Load and prepare  
 
     print("LOADING DATA")
 
@@ -393,7 +390,7 @@ if __name__ == "__main__":
     bounds = [(-20, -10), (0, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
 
     if run:
-        result = opt.minimize(alignment.loss_function, initial_guess, args=(fixed, changing, hmix, hmiy, hmi_data, intensities), bounds=bounds)
+        result = opt.minimize(alignment.loss_function, initial_guess, args=(fixed, changing, hmix, hmiy, hmi_data, intensities), bounds=bounds, method='Powell', options={'maxiter': 200, 'disp': True})
         best_parameters = result.x
 
         print('Optimization converged:', result.success)
@@ -434,3 +431,5 @@ if __name__ == "__main__":
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities - Z_fine, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
 
     plt.show()
+
+    # best parameters [-1.02523844e+01  1.22342979e+01 -4.36652273e-02  9.43861732e-03 -2.58909492e-01  1.87743852e-02]
