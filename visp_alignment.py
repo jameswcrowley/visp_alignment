@@ -309,9 +309,9 @@ class Alignment:
         )
 
         # perform the interpolation onto whatever coordiantes you give it. Here, we give it the DKIST coordinates.
-        Z_fine = grid_interpolator((coords[:, :, 1], coords[:, :, 0]))
+        hMI_interpolated_to_coords = grid_interpolator((coords[:, :, 1], coords[:, :, 0]))
 
-        return Z_fine
+        return hMI_interpolated_to_coords
 
     def loss_function(self, parameters, fixed_keywords, changing_keywords, hmix, hmiy, hmi_data, data_numpy):
         """
@@ -335,14 +335,21 @@ class Alignment:
         # shift the DKIST coordinates based on the input parameters, identify the relevant HMI data that overlaps with the DKIST data, and interpolate the HMI data onto the DKIST coordinates.
         coords_new = self.construct_dkist_coords(fixed_keywords, changing_keywords, parameters)
         relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
-        Z_fine = self.interpolate_hmi_to_coords(relevant_hmix, relevant_hmiy, relevant_hmi_data, coords_new)
+        HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(relevant_hmix, relevant_hmiy, relevant_hmi_data, coords_new)
 
         # double-check the data is normalized so it can be better compared.
-        Z_fine /= np.nanmax(Z_fine)
+         
+        HMI_interpolated_to_coords -= np.nanmean(HMI_interpolated_to_coords)
+        HMI_interpolated_to_coords /= np.nanstd(HMI_interpolated_to_coords)
+        HMI_interpolated_to_coords /= np.nanmax(HMI_interpolated_to_coords)
+
+        data_numpy -= np.nanmean(data_numpy)
+        data_numpy /= np.nanstd(data_numpy)
         data_numpy /= np.nanmax(data_numpy)
+
         # calculate the loss between the interpolated HMI data and the DKIST data. this could be something like mean squared error or mean absolute error. 
         # I think eventually, we want to switch to the cross-correlation function to quantify the difference between the two datasets, but for now, this is a simple example.
-        loss = np.nansum((Z_fine - data_numpy)**2)
+        loss = np.nansum((HMI_interpolated_to_coords - data_numpy)**2)
 
         return loss
 
