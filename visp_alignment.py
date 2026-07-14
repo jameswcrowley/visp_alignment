@@ -218,7 +218,7 @@ class DataLoader:
 
         self.fixed_keywords, self.changing_keywords, self.fits_files = self.get_dkist_headers()
         self.start_time, self.end_time = self.get_time(self.changing_keywords)
-        self.intensities = self.get_dkist_wavelengths()
+        self.intensities = self.get_dkist_wavelengths2()
 
         self.hmix, self.hmiy, self.hmi_data, self.time = self.load_hmi(Time(self.start_time), Time(self.end_time))
 
@@ -423,7 +423,7 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = True
+    run = False
 
     print("Run =", run)
     
@@ -459,7 +459,7 @@ if __name__ == "__main__":
         print('Best parameters found:', best_parameters)
 
     else:
-        best_parameters = [-1.00000000e+01,  1.19873625e+01, -4.19629216e-02, -5.44455227e-03, -2.71711594e-01,  3.86630908e-02]
+        best_parameters = [-5.00000517e+00,  6.92241086e+00, -7.59570122e-03, -4.62867902e-03, -1.41114322e-01,  2.45184961e-02]
 
     # assemble final coordinates
 
