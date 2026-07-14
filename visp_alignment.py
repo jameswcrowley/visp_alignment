@@ -409,11 +409,12 @@ class Alignment:
         interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
         
         result = opt.minimize(self.loss_function, 
-                              initial_guess, 
-                              args=(self.data_loader.intensities, interpolator), 
-                              bounds=bounds, 
-                              method='Powell', 
-                              options={'maxiter': 200, 'disp': True})
+            initial_guess, 
+            args=(self.data_loader.intensities, interpolator), 
+            bounds=bounds, 
+            method='Powell', 
+            options={'maxiter': 200, 'disp': True}
+        )
 
         best_parameters = result.x
         
