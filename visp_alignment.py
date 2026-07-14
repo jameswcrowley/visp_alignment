@@ -217,7 +217,7 @@ class Alignment:
         """
 
         # TODO: pci_j's should be constrained so that the transformation matrix is invertable -> physically meaningful. We should switch to dx, dy, and rotation angles instead of directly manipulating the pci_j's.
-        crval1_shift, crval3_shift, pc1_1_shift, pc1_3_shift, pc3_1_shift, pc3_3_shift = parameters
+        crval1_shift, crval3_shift, pc1_1_shift, pc3_1_shift, pc1_3_shift, pc3_3_shift = parameters
 
 
 
@@ -458,5 +458,3 @@ if __name__ == "__main__":
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities - Z_fine, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
 
     plt.show()
-
-    # best parameters [-1.02523844e+01  1.22342979e+01 -4.36652273e-02  9.43861732e-03 -2.58909492e-01  1.87743852e-02]
