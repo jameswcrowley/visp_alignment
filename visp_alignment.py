@@ -217,7 +217,7 @@ class Alignment:
         """
 
         # TODO: pci_j's should be constrained so that the transformation matrix is invertable -> physically meaningful. We should switch to dx, dy, and rotation angles instead of directly manipulating the pci_j's.
-        crval1_shift, crval3_shift, dx, dy, theta = parameters
+        crval1_shift, crval3_shift, pc1_1_shift, pc1_3_shift, pc3_1_shift, pc3_3_shift = parameters
 
 
 
@@ -355,11 +355,11 @@ class Alignment:
          
         # TODO: update this so that it does not modify the original arrays in-place, which could affect subsequent calculations. Consider creating copies before normalizing.
         HMI_interpolated_to_coords -= np.nanmean(HMI_interpolated_to_coords)
-        HMI_interpolated_to_coords /= np.nanstd(HMI_interpolated_to_coords)
+        # HMI_interpolated_to_coords /= np.nanstd(HMI_interpolated_to_coords)
         HMI_interpolated_to_coords /= np.nanmax(HMI_interpolated_to_coords)
 
-        data_numpy -= np.nanmean(data_numpy)
-        data_numpy /= np.nanstd(data_numpy)
+        # data_numpy -= np.nanmean(data_numpy)
+        # data_numpy /= np.nanstd(data_numpy)
         data_numpy /= np.nanmax(data_numpy)
 
         # calculate the loss between the interpolated HMI data and the DKIST data. this could be something like mean squared error or mean absolute error. 
