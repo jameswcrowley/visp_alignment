@@ -155,7 +155,7 @@ class DataLoader:
         """
         fits_files = [
             filename for filename in sorted(os.listdir(self.cfg.path_to_dkist_data))
-            if filename.endswith('.fits') and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename)) and '_I_' in filename
+            if filename.endswith('.fits') and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename))
         ]
         
         header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
@@ -356,7 +356,7 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = True
+    run = False
 
     print("Run =", run)
     
@@ -407,7 +407,7 @@ if __name__ == "__main__":
         print('Best parameters found:', best_parameters)
 
     else:
-        best_parameters = [-10., 13.84240769, -0.02421565, 0.05795649, -0.32934928, -0.09928946]
+        best_parameters = [-1.02523844e+01,  1.22342979e+01, -4.36652273e-02,  9.43861732e-03, -2.58909492e-01,  1.87743852e-02]
 
     # assemble final coordinates
 
