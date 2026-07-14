@@ -43,7 +43,7 @@ class DataLoader:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def get_time(self):
+    def get_time(self, changing_keywords):
         """
         The method uses the path_to_dkist_data from the configuration to locate the DKIST .fits files.
 
@@ -51,20 +51,7 @@ class DataLoader:
         ---------
         tuple: A tuple containing the start and end times of the DKIST data in the folder
         """
-        fits_files = [
-            filename for filename in sorted(os.listdir(self.cfg.path_to_dkist_data))
-            if filename.endswith('.fits') and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename)) and '_I_' in filename
-        ]
-
-
-        first_path = os.path.join(self.cfg.path_to_dkist_data, fits_files[0])
-        last_path = os.path.join(self.cfg.path_to_dkist_data, fits_files[-1])
-
-
-        fits_header1 = fits.open(first_path)[1].header
-        fits_header2 = fits.open(last_path)[1].header
-    
-        return (fits_header1["DATE-AVG"], fits_header2["DATE-AVG"])
+        return (changing_keywords["DATE-AVG"][0], changing_keywords["DATE-AVG"][-1])
 
     def normalize(self, arr):
         normalized = arr
@@ -97,7 +84,7 @@ class DataLoader:
         # read in the middle file using scipy.map to extract the coordinates and data.
         # TODO: switch to reading in the middle file of the search results instead of always taking the first one.
         # TODO: also need to eventually read in all HMI files 
-        hmi = map.Map(hmi_files[0])
+        hmi = map.Map(hmi_files[len(hmi_files)//2])
 
         # read in the x and y coordinates as seperate arrays.
         hmix = map.all_coordinates_from_map(hmi).Tx
@@ -120,12 +107,21 @@ class DataLoader:
         ----------
         mean_data(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
         """
-        # TODO: add handling if there aren't multiple Stokes components in the dataset
+
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
-        print(f'Dataset loaded from {asdf_path} with shape {ds[:, :, :, :].data.shape}')
-        all_data = np.array(ds[0, :, :, :].data) # load all slits and wavelenghths of the dataset across the first Stokes parameter
 
+        # print(f'Dataset loaded from {asdf_path} with shape {ds[:, :, :, :].data.shape}')
+        #TODO: figure out how to optimize getting data from ds
+        all_data = None
+        if ds.wcs.pixel_n_dim == 4:
+            all_data = np.array(ds[0, :, :, :].data) # load all slits, slit positions, and wavelenghths of the dataset across the first Stoke
+        elif ds.wcs.pixel_n_dim == 5:
+            all_data = np.array(ds[0, 0, :, :, :].data) # load all slits, slit positions, and  wavelenghths of the dataset across the first Stoke and raster
+        else:
+            all_data = np.array(ds[:, :, :].data)
+        
+        # print(all_data.shape)
         median_wavelength_data = np.nanmedian(all_data, axis = (0, 2)) # median spectra for all slits and positions along slits
 
         threshold = np.percentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
@@ -150,8 +146,14 @@ class DataLoader:
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
 
-        data = np.array(ds[0, :, :30, :].data)
-        # print("original data", data)
+        data = None
+        if ds.wcs.pixel_n_dim == 4:
+            data = np.array(ds[0, :, :30, :].data)
+        elif ds.wcs.pixel_n_dim == 5:
+            data = np.array(ds[0, 0, :, :30, :].data)
+        else:
+            data = np.array(ds[:, :30, :].data)
+
         mean_data = np.nanmean(data, axis = 1)
         mean_data = self.normalize(mean_data)
         return mean_data
@@ -244,28 +246,46 @@ class Alignment:
         # initialize an empty array to fill with the coordinates. the shape is (nx, ny, 2) because we have nx by ny pixels and each pixel has an x and y coordinate.
         coords = np.zeros((nx, ny, 2))
 
+        # print(nx)
+        i = np.arange(nx)[:, None] + 1
+        j = np.arange(ny)[None, :] + 1
+
+        #TODO: Figure out what to do about raster repeats
+        crval1 = np.asarray(changing_keywords["CRVAL1"])[:nx, None]
+        crval3 = np.asarray(changing_keywords["CRVAL3"])[:nx, None]
+        crpix1 = np.asarray(changing_keywords["CRPIX1"])[:nx, None]
+        crpix3 = np.asarray(changing_keywords["CRPIX3"])[:nx, None]
+        # print(crval1.shape, crval3.shape, crpix1.shape, crpix3.shape, i.shape, j.shape)
+
+        x = (crval3 + cdelt3 * (pc3_3 * (i - crpix3)+ pc3_1 * (j - crpix1)))
+
+        y = (crval1 + cdelt1 * (pc1_3 * (i - crpix3) + pc1_1 * (j - crpix1)))
+
+        coords[:, :, 0] = x
+        coords[:, :, 1] = y
+
 
         # loop through each fits file, extract the relevant header keywords, and calculate the coordinates for each pixel in that slit. then fill the coords_new array with those coordinates.
 
         # TODO: this should be possible to vectorize instead of using a for loop, which would likely be MUCH faster for large datasets.
-        for i in range(nx):
-            crval1 = changing_keywords['CRVAL1'][i]
-            crval3 = changing_keywords['CRVAL3'][i]
+        # for i in range(nx):
+        #     crval1 = changing_keywords['CRVAL1'][i]
+        #     crval3 = changing_keywords['CRVAL3'][i]
 
-            crpix1 = changing_keywords['CRPIX1'][i]
-            crpix3 = changing_keywords['CRPIX3'][i]
+        #     crpix1 = changing_keywords['CRPIX1'][i]
+        #     crpix3 = changing_keywords['CRPIX3'][i]
 
-            # y-index of the position of the pixel ALONG the slit (i.e. 1 to ny). This is used to calculate the coordinates of each pixel along the slit.
-            indices = np.linspace(1, ny, ny, dtype = int)
+        #     # y-index of the position of the pixel ALONG the slit (i.e. 1 to ny). This is used to calculate the coordinates of each pixel along the slit.
+        #     indices = np.linspace(1, ny, ny, dtype = int)
 
-            # calculate the coordinates of each pixel along the slit using the header keywords and the y-index. 
-            # This formula is the linear transformation-matrix form of the coordinate assembly.
-            slit_coords_x = (crval3 + crval3_shift) + cdelt3 * ((pc3_3 + pc3_3_shift) * (i - (crpix3)) + (pc3_1 + pc3_1_shift) * (indices - (crpix1)))
-            slit_coords_y = (crval1 + crval1_shift) + cdelt1 * ((pc1_3 + pc1_3_shift) * (i - (crpix3)) + (pc1_1 + pc1_1_shift) * (indices - (crpix1)))
+        #     # calculate the coordinates of each pixel along the slit using the header keywords and the y-index. 
+        #     # This formula is the linear transformation-matrix form of the coordinate assembly.
+        #     slit_coords_x = (crval3 + crval3_shift) + cdelt3 * ((pc3_3 + pc3_3_shift) * (i - (crpix3)) + (pc3_1 + pc3_1_shift) * (indices - (crpix1)))
+        #     slit_coords_y = (crval1 + crval1_shift) + cdelt1 * ((pc1_3 + pc1_3_shift) * (i - (crpix3)) + (pc1_1 + pc1_1_shift) * (indices - (crpix1)))
 
-            # save each pixel's coordinates into x and y indices of the the coords_new array. 
-            coords[i, :, 0] = slit_coords_x
-            coords[i, :, 1] = slit_coords_y
+        #     # save each pixel's coordinates into x and y indices of the the coords_new array. 
+        #     coords[i, :, 0] = slit_coords_x
+        #     coords[i, :, 1] = slit_coords_y
 
         return coords
     
@@ -363,8 +383,11 @@ if __name__ == "__main__":
 
     print("Run =", run)
     
-    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
-    path_to_sunpy = "~/sunpy/data/"
+    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    # path_to_sunpy = "~/sunpy/data/"
+
+    path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
+    path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
 
     cfg = Config(
     path_to_dkist_data=path_to_dkist_data, 
@@ -381,7 +404,8 @@ if __name__ == "__main__":
 
     fixed, changing, fits_files = loader.get_dkist_headers()
 
-    intensities = loader.get_dkist_wavelengths2()
+    # intensities = loader.get_dkist_wavelengths2()
+    intensities = loader.get_dkist_wavelengths()
 
     hmix, hmiy, hmi_data, time = loader.load_hmi(Time(changing["DATE-AVG"][0]), Time(changing["DATE-AVG"][4]))
 
@@ -435,24 +459,24 @@ if __name__ == "__main__":
     # plt.pcolormesh(assembled_dkist_coords[:, :, 0], assembled_dkist_coords[:, :, 1], intensities, cmap = 'plasma', alpha=1)
 
     plt.figure(figsize = [25, 8])
-    plt.subplot(1,4,1)
+    plt.subplot(2,2,1)
     plt.title('Original DKIST data overlayed over original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], intensities, cmap = 'plasma')
 
-    plt.subplot(1,4,2)
+    plt.subplot(2,2,2)
     plt.title('New (interpolated) HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], Z_fine, cmap = 'plasma')
     plt.colorbar()
 
-    plt.subplot(1,4,3)
+    plt.subplot(2,2,3)
     plt.title('Aligned DKIST data overlaid on original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities, cmap = 'plasma', alpha = 1)
     plt.colorbar()
 
-    plt.subplot(1,4,4)
+    plt.subplot(2,2,4)
     plt.title('Difference between DKIST and HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities - Z_fine, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
