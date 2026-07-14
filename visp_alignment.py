@@ -157,10 +157,7 @@ class DataLoader:
         fixed_keywords(dict): A dictionary of fixed keywords {key: value}
         changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
-        fits_files = [
-            filename for filename in sorted(os.listdir(self.cfg.path_to_dkist_data))
-            if filename.endswith('.fits') and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename))
-        ]
+        fits_files = fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x]
         
         header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
         fixed_keywords = {
@@ -354,7 +351,7 @@ class Alignment:
         # double-check the data is normalized so it can be better compared.
          
         # TODO: update this so that it does not modify the original arrays in-place, which could affect subsequent calculations. Consider creating copies before normalizing.
-        HMI_interpolated_to_coords -= np.nanmean(HMI_interpolated_to_coords)
+        # HMI_interpolated_to_coords -= np.nanmean(HMI_interpolated_to_coords)
         # HMI_interpolated_to_coords /= np.nanstd(HMI_interpolated_to_coords)
         HMI_interpolated_to_coords /= np.nanmax(HMI_interpolated_to_coords)
 
@@ -373,7 +370,7 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = False
+    run = True
 
     print("Run =", run)
     
@@ -458,3 +455,5 @@ if __name__ == "__main__":
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities - Z_fine, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
 
     plt.show()
+
+    print("DONE")
