@@ -375,11 +375,17 @@ class Alignment:
 
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(interpolator, coords_new)
 
-        # calculate the loss between the interpolated HMI data and the DKIST data. this could be something like mean squared error or mean absolute error. 
-        # I think eventually, we want to switch to the cross-correlation function to quantify the difference between the two datasets, but for now, this is a simple example.
+        x = HMI_interpolated_to_coords
+        y = data_numpy
 
-        # TODO: move to cross correlation
-        loss = np.nansum((HMI_interpolated_to_coords - data_numpy)**2)
+        mask = ~np.isnan(x) & ~np.isnan(y)
+        xv, yv = x[mask], y[mask]
+
+        xv = xv - np.mean(xv) 
+        yv = yv - np.mean(yv)
+        corr = np.sum(xv*yv) / np.sqrt(np.sum(xv*xv) * np.sum(yv*yv))
+
+        loss = -corr
 
         return loss
     
@@ -452,7 +458,7 @@ if __name__ == "__main__":
         print('Best parameters found:', best_parameters)
 
     else:
-        best_parameters = [-1.02523844e+01,  1.22342979e+01, -4.36652273e-02,  9.43861732e-03, -2.58909492e-01,  1.87743852e-02]
+        best_parameters = [-1.00000000e+01,  1.19873625e+01, -4.19629216e-02, -5.44455227e-03, -2.71711594e-01,  3.86630908e-02]
 
     # assemble final coordinates
 
