@@ -66,6 +66,13 @@ class DataLoader:
     
         return (fits_header1["DATE-AVG"], fits_header2["DATE-AVG"])
 
+    def normalize(self, arr):
+        normalized = arr
+        # normalized -= np.nanmean(normalized)
+        # normalized /= np.nanstd(normalized)
+        normalized /= np.nanmax(normalized)
+        return normalized
+
     def load_hmi(self, start_time: Time, end_time: Time):
         """
         Downloads all HMI data within one minute of the passed time interval
@@ -99,6 +106,8 @@ class DataLoader:
         # read in the intensity data as a 2D array.  
         hmi_data = hmi.data
 
+        hmi_data = self.normalize(hmi_data)
+
         image_time = hmi.date
 
         return hmix, hmiy, hmi_data, image_time
@@ -128,6 +137,7 @@ class DataLoader:
         print(50 * '-')
 
         mean_data = np.nanmean(relevant_data, axis = 1) # mean of the data across the wavelength samples above the threshold
+        mean_data = self.normalize(mean_data)
         return mean_data 
     
     def get_dkist_wavelengths2(self):
@@ -142,7 +152,9 @@ class DataLoader:
 
         data = np.array(ds[0, :, :30, :].data)
         # print("original data", data)
-        return np.nanmean(data, axis = 1)
+        mean_data = np.nanmean(data, axis = 1)
+        mean_data = self.normalize(mean_data)
+        return mean_data
 
     def get_dkist_headers(self): #read in data step 1
         """
@@ -336,17 +348,6 @@ class Alignment:
 
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(interpolator, coords_new)
 
-        # double-check the data is normalized so it can be better compared.
-         
-        # TODO: update this so that it does not modify the original arrays in-place, which could affect subsequent calculations. Consider creating copies before normalizing.
-        # HMI_interpolated_to_coords -= np.nanmean(HMI_interpolated_to_coords)
-        # HMI_interpolated_to_coords /= np.nanstd(HMI_interpolated_to_coords)
-        HMI_interpolated_to_coords /= np.nanmax(HMI_interpolated_to_coords)
-
-        # data_numpy -= np.nanmean(data_numpy)
-        # data_numpy /= np.nanstd(data_numpy)
-        data_numpy /= np.nanmax(data_numpy)
-
         # calculate the loss between the interpolated HMI data and the DKIST data. this could be something like mean squared error or mean absolute error. 
         # I think eventually, we want to switch to the cross-correlation function to quantify the difference between the two datasets, but for now, this is a simple example.
 
@@ -358,7 +359,7 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = True
+    run = False
 
     print("Run =", run)
     
@@ -382,11 +383,7 @@ if __name__ == "__main__":
 
     intensities = loader.get_dkist_wavelengths2()
 
-    intensities /= np.nanmax(intensities) # normalizing it to be between 0 and 1 for the optimization process
-
     hmix, hmiy, hmi_data, time = loader.load_hmi(Time(changing["DATE-AVG"][0]), Time(changing["DATE-AVG"][4]))
-
-    hmi_data /= np.nanmax(hmi_data) # normalizing it to be between 0 and 1 for the optimization process
 
     alignment = Alignment(cfg)
 
@@ -447,16 +444,19 @@ if __name__ == "__main__":
     plt.title('New (interpolated) HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], Z_fine, cmap = 'plasma')
+    plt.colorbar()
 
     plt.subplot(1,4,3)
     plt.title('Aligned DKIST data overlaid on original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities, cmap = 'plasma', alpha = 1)
+    plt.colorbar()
 
     plt.subplot(1,4,4)
     plt.title('Difference between DKIST and HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities - Z_fine, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
+    plt.colorbar()
 
     plt.show()
 
