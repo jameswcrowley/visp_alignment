@@ -14,9 +14,6 @@ import os
 from scipy import interpolate as interp
 import scipy.optimize as opt
 
-
-
-
 class Config:
     """
     Specifies all settings, paths, and other metaparameters used in the alignment
@@ -379,6 +376,8 @@ if __name__ == "__main__":
     intensities /= np.nanmax(intensities) # normalizing it to be between 0 and 1 for the optimization process
 
     hmix, hmiy, hmi_data, time = loader.load_hmi(Time(changing["DATE-AVG"][0]), Time(changing["DATE-AVG"][4]))
+
+    hmi_data /= np.nanmax(hmi_data) # normalizing it to be between 0 and 1 for the optimization process
 
     alignment = Alignment(cfg)
 
