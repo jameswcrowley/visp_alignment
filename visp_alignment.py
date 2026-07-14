@@ -218,7 +218,7 @@ class DataLoader:
 
         self.fixed_keywords, self.changing_keywords, self.fits_files = self.get_dkist_headers()
         self.start_time, self.end_time = self.get_time(self.changing_keywords)
-        self.intensities = self.get_dkist_wavelengths()
+        self.intensities = self.get_dkist_wavelengths2()
 
         self.hmix, self.hmiy, self.hmi_data, self.time = self.load_hmi(Time(self.start_time), Time(self.end_time))
 
@@ -375,11 +375,17 @@ class Alignment:
 
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(interpolator, coords_new)
 
-        # calculate the loss between the interpolated HMI data and the DKIST data. this could be something like mean squared error or mean absolute error. 
-        # I think eventually, we want to switch to the cross-correlation function to quantify the difference between the two datasets, but for now, this is a simple example.
+        x = HMI_interpolated_to_coords
+        y = data_numpy
 
-        # TODO: move to cross correlation
-        loss = np.nansum((HMI_interpolated_to_coords - data_numpy)**2)
+        mask = ~np.isnan(x) & ~np.isnan(y)
+        xv, yv = x[mask], y[mask]
+
+        xv = xv - np.mean(xv) 
+        yv = yv - np.mean(yv)
+        corr = np.sum(xv*yv) / np.sqrt(np.sum(xv*xv) * np.sum(yv*yv))
+
+        loss = -corr
 
         return loss
     
@@ -403,11 +409,12 @@ class Alignment:
         interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
         
         result = opt.minimize(self.loss_function, 
-                              initial_guess, 
-                              args=(self.data_loader.intensities, interpolator), 
-                              bounds=bounds, 
-                              method='Powell', 
-                              options={'maxiter': 200, 'disp': True})
+            initial_guess, 
+            args=(self.data_loader.intensities, interpolator), 
+            bounds=bounds, 
+            method='Powell', 
+            options={'maxiter': 200, 'disp': True}
+        )
 
         best_parameters = result.x
         
@@ -416,7 +423,7 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = True
+    run = False
 
     print("Run =", run)
     
@@ -452,7 +459,7 @@ if __name__ == "__main__":
         print('Best parameters found:', best_parameters)
 
     else:
-        best_parameters = [-1.02523844e+01,  1.22342979e+01, -4.36652273e-02,  9.43861732e-03, -2.58909492e-01,  1.87743852e-02]
+        best_parameters = [-5.00000517e+00,  6.92241086e+00, -7.59570122e-03, -4.62867902e-03, -1.41114322e-01,  2.45184961e-02]
 
     # assemble final coordinates
 
