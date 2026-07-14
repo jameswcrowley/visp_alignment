@@ -43,7 +43,7 @@ class DataLoader:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def get_time(self):
+    def get_time(self, changing_keywords):
         """
         The method uses the path_to_dkist_data from the configuration to locate the DKIST .fits files.
 
@@ -51,20 +51,7 @@ class DataLoader:
         ---------
         tuple: A tuple containing the start and end times of the DKIST data in the folder
         """
-        fits_files = [
-            filename for filename in sorted(os.listdir(self.cfg.path_to_dkist_data))
-            if filename.endswith('.fits') and os.path.isfile(os.path.join(self.cfg.path_to_dkist_data, filename)) and '_I_' in filename
-        ]
-
-
-        first_path = os.path.join(self.cfg.path_to_dkist_data, fits_files[0])
-        last_path = os.path.join(self.cfg.path_to_dkist_data, fits_files[-1])
-
-
-        fits_header1 = fits.open(first_path)[1].header
-        fits_header2 = fits.open(last_path)[1].header
-    
-        return (fits_header1["DATE-AVG"], fits_header2["DATE-AVG"])
+        return (changing_keywords["DATE-AVG"][0], changing_keywords["DATE-AVG"][-1])
 
     def load_hmi(self, start_time: Time, end_time: Time):
         """
