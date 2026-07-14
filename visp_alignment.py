@@ -230,8 +230,6 @@ class Alignment:
         # TODO: pci_j's should be constrained so that the transformation matrix is invertable -> physically meaningful. We should switch to dx, dy, and rotation angles instead of directly manipulating the pci_j's.
         crval1_shift, crval3_shift, pc1_1_shift, pc3_1_shift, pc1_3_shift, pc3_3_shift = parameters
 
-
-
         cdelt1 = fixed_keywords['CDELT1']
         cdelt3 = fixed_keywords['CDELT3']
 
@@ -243,7 +241,6 @@ class Alignment:
         nx = fixed_keywords['DNAXIS3']
         ny = fixed_keywords['DNAXIS1']
 
-        # initialize an empty array to fill with the coordinates. the shape is (nx, ny, 2) because we have nx by ny pixels and each pixel has an x and y coordinate.
         coords = np.zeros((nx, ny, 2))
 
         # print(nx)
@@ -257,9 +254,9 @@ class Alignment:
         crpix3 = np.asarray(changing_keywords["CRPIX3"])[:nx, None]
         # print(crval1.shape, crval3.shape, crpix1.shape, crpix3.shape, i.shape, j.shape)
 
-        x = (crval3 + cdelt3 * (pc3_3 * (i - crpix3)+ pc3_1 * (j - crpix1)))
+        x = (crval3 + crval3_shift) + cdelt3 * ((pc3_3 + pc3_3_shift) * (i - (crpix3)) + (pc3_1 + pc3_1_shift) * (j - (crpix1)))
 
-        y = (crval1 + cdelt1 * (pc1_3 * (i - crpix3) + pc1_1 * (j - crpix1)))
+        y = (crval1 + crval1_shift) + cdelt1 * ((pc1_3 + pc1_3_shift) * (i - (crpix3)) + (pc1_1 + pc1_1_shift) * (j - (crpix1)))
 
         coords[:, :, 0] = x
         coords[:, :, 1] = y
@@ -383,11 +380,11 @@ if __name__ == "__main__":
 
     print("Run =", run)
     
-    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
-    # path_to_sunpy = "~/sunpy/data/"
+    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    path_to_sunpy = "~/sunpy/data/"
 
-    path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
-    path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
+    # path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
+    # path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
 
     cfg = Config(
     path_to_dkist_data=path_to_dkist_data, 
@@ -404,8 +401,7 @@ if __name__ == "__main__":
 
     fixed, changing, fits_files = loader.get_dkist_headers()
 
-    # intensities = loader.get_dkist_wavelengths2()
-    intensities = loader.get_dkist_wavelengths()
+    intensities = loader.get_dkist_wavelengths2()
 
     hmix, hmiy, hmi_data, time = loader.load_hmi(Time(changing["DATE-AVG"][0]), Time(changing["DATE-AVG"][4]))
 
@@ -482,6 +478,6 @@ if __name__ == "__main__":
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities - Z_fine, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
     plt.colorbar()
 
-    plt.show()
-
     print("DONE")
+
+    plt.show()
