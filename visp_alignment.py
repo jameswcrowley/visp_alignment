@@ -98,12 +98,21 @@ class DataLoader:
         ----------
         mean_data(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
         """
-        # TODO: add handling if there aren't multiple Stokes components in the dataset
+
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
-        print(f'Dataset loaded from {asdf_path} with shape {ds[:, :, :, :].data.shape}')
-        all_data = np.array(ds[0, :, :, :].data) # load all slits and wavelenghths of the dataset across the first Stokes parameter
 
+        # print(f'Dataset loaded from {asdf_path} with shape {ds[:, :, :, :].data.shape}')
+        #TODO: figure out how to optimize getting data from ds
+        all_data = None
+        if ds.wcs.pixel_n_dim == 4:
+            all_data = np.array(ds[0, :, :, :].data) # load all slits, slit positions, and wavelenghths of the dataset across the first Stoke
+        elif ds.wcs.pixel_n_dim == 5:
+            all_data = np.array(ds[0, 0, :, :, :].data) # load all slits, slit positions, and  wavelenghths of the dataset across the first Stoke and raster
+        else:
+            all_data = np.array(ds[:, :, :].data)
+        
+        # print(all_data.shape)
         median_wavelength_data = np.nanmedian(all_data, axis = (0, 2)) # median spectra for all slits and positions along slits
 
         threshold = np.percentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
@@ -115,6 +124,7 @@ class DataLoader:
         print(50 * '-')
 
         mean_data = np.nanmean(relevant_data, axis = 1) # mean of the data across the wavelength samples above the threshold
+        print(mean_data.shape)
         return mean_data 
     
     def get_dkist_wavelengths2(self):
@@ -127,9 +137,16 @@ class DataLoader:
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
 
-        data = np.array(ds[0, :, :30, :].data)
-        # print("original data", data)
-        return np.nanmean(data, axis = 1)
+        data = None
+        if ds.wcs.pixel_n_dim == 4:
+            data = np.array(ds[0, :, :30, :].data)
+        elif ds.wcs.pixel_n_dim == 5:
+            data = np.array(ds[0, 0, :, :30, :].data)
+        else:
+            data = np.array(ds[:, :30, :].data)
+
+        mean_data = np.nanmean(data, axis = 1)
+        return mean_data
 
     def get_dkist_headers(self): #read in data step 1
         """
@@ -382,8 +399,11 @@ if __name__ == "__main__":
 
     print("Run =", run)
     
-    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
-    path_to_sunpy = "~/sunpy/data/"
+    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    # path_to_sunpy = "~/sunpy/data/"
+
+    path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
+    path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
 
     cfg = Config(
     path_to_dkist_data=path_to_dkist_data, 
@@ -400,7 +420,8 @@ if __name__ == "__main__":
 
     fixed, changing, fits_files = loader.get_dkist_headers()
 
-    intensities = loader.get_dkist_wavelengths2()
+    # intensities = loader.get_dkist_wavelengths2()
+    intensities = loader.get_dkist_wavelengths()
 
     intensities /= np.nanmax(intensities) # normalizing it to be between 0 and 1 for the optimization process
 
@@ -442,22 +463,22 @@ if __name__ == "__main__":
     # plt.pcolormesh(assembled_dkist_coords[:, :, 0], assembled_dkist_coords[:, :, 1], intensities, cmap = 'plasma', alpha=1)
 
     plt.figure(figsize = [25, 8])
-    plt.subplot(1,4,1)
+    plt.subplot(2,2,1)
     plt.title('Original DKIST data overlayed over original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], intensities, cmap = 'plasma')
 
-    plt.subplot(1,4,2)
+    plt.subplot(2,2,2)
     plt.title('New (interpolated) HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], Z_fine, cmap = 'plasma')
 
-    plt.subplot(1,4,3)
+    plt.subplot(2,2,3)
     plt.title('Aligned DKIST data overlaid on original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities, cmap = 'plasma', alpha = 1)
 
-    plt.subplot(1,4,4)
+    plt.subplot(2,2,4)
     plt.title('Difference between DKIST and HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], intensities - Z_fine, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
