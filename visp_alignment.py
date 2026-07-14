@@ -289,7 +289,7 @@ class Alignment:
 
         return relevant_hmix, relevant_hmiy, relevant_hmi_data
 
-    def interpolate_hmi_to_coords(self, relevant_hmix, relevant_hmiy, relevant_hmi_data, coords):
+    def interpolate_hmi_to_coords(self, interpolator, coords):
         """
         This function interpolates the relevant HMI data onto the DKIST coordinates. It returns a 2D array of the interpolated HMI data, with shape (nx, ny), where nx is the number of slits and ny is the number of pixels along the slit.
         
@@ -307,22 +307,12 @@ class Alignment:
         # an example of one way to interpolate the HMI data onto the DKIST coordinates. 
         # I don't know if this is the final method we'll use but it is a working example.
         
-        # set up the interpolator:
-        # TODO: should be much faster if we construct the interpolator ONCE and then feed in new coordinates, not reconstruct it every time we call this function.
-        grid_interpolator = interp.RegularGridInterpolator(
-            (relevant_hmiy, relevant_hmix),
-            relevant_hmi_data, 
-            method='cubic',
-            bounds_error=False, 
-            fill_value=np.nan
-        )
-
         # perform the interpolation onto whatever coordiantes you give it. Here, we give it the DKIST coordinates.
-        hMI_interpolated_to_coords = grid_interpolator((coords[:, :, 1], coords[:, :, 0]))
+        hMI_interpolated_to_coords = interpolator((coords[:, :, 1], coords[:, :, 0]))
 
         return hMI_interpolated_to_coords
 
-    def loss_function(self, parameters, fixed_keywords, changing_keywords, relevant_hmix, relevant_hmiy, relevant_hmi_data, data_numpy):
+    def loss_function(self, parameters, fixed_keywords, changing_keywords, data_numpy, interpolator):
         """
         This function calculates the loss between the interpolated HMI data and the DKIST data.
         It returns the loss value - here, I chose to use the sum of squared differences to quantify the difference between the two datasets, but other metrics could be used as well.
@@ -344,8 +334,7 @@ class Alignment:
         # shift the DKIST coordinates based on the input parameters, identify the relevant HMI data that overlaps with the DKIST data, and interpolate the HMI data onto the DKIST coordinates.
         coords_new = self.construct_dkist_coords(fixed_keywords, changing_keywords, parameters)
 
-        # TODO: I think we should crop ONCE in a larger area around DKIST coords, and then pass it in once, not update the crop for every interpolation.
-        HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(relevant_hmix, relevant_hmiy, relevant_hmi_data, coords_new)
+        HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(interpolator, coords_new)
 
         # double-check the data is normalized so it can be better compared.
          
@@ -413,8 +402,16 @@ if __name__ == "__main__":
     coords_new = alignment.construct_dkist_coords(fixed, changing, initial_guess)
     relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
 
+    interpolator = interp.RegularGridInterpolator(
+            (relevant_hmiy, relevant_hmix),
+            relevant_hmi_data, 
+            method='cubic',
+            bounds_error=False, 
+            fill_value=np.nan
+    )
+
     if run:
-        result = opt.minimize(alignment.loss_function, initial_guess, args=(fixed, changing, relevant_hmix, relevant_hmiy, relevant_hmi_data, intensities), bounds=bounds, method='Powell', options={'maxiter': 200, 'disp': True})
+        result = opt.minimize(alignment.loss_function, initial_guess, args=(fixed, changing, intensities, interpolator), bounds=bounds, method='Powell', options={'maxiter': 200, 'disp': True})
         best_parameters = result.x
 
         print('Optimization converged:', result.success)
@@ -427,7 +424,14 @@ if __name__ == "__main__":
 
     coords_new = alignment.construct_dkist_coords(fixed, changing, best_parameters)
     relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
-    Z_fine = alignment.interpolate_hmi_to_coords(relevant_hmix, relevant_hmiy, relevant_hmi_data, coords_new)
+    interpolator = interp.RegularGridInterpolator(
+            (relevant_hmiy, relevant_hmix),
+            relevant_hmi_data, 
+            method='cubic',
+            bounds_error=False, 
+            fill_value=np.nan
+    )
+    Z_fine = alignment.interpolate_hmi_to_coords(interpolator, coords_new)
 
     # plt.figure(figsize = [12, 10])
     # plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
