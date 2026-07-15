@@ -102,8 +102,6 @@ class DataLoader:
 
             hmi_times.append(image_time)
         
-        hmi_times = sorted(hmi_times)
-
         return hmi_coordinates_and_data, hmi_times
     
     def find_nearest_hmi(self, target, hmi_coordinates_and_data, hmi_times):
