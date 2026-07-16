@@ -59,9 +59,11 @@ class DataLoader:
 
     def normalize(self, arr):
         normalized = arr
-        # normalized -= np.nanmean(normalized)
-        # normalized /= np.nanstd(normalized)
-        normalized /= np.nanmax(normalized)
+        # # normalized -= np.nanmean(normalized)
+        # # normalized /= np.nanstd(normalized)
+        # normalized /= np.nanmax(normalized)
+        # return normalized
+        normalized = (normalized- np.nanmedian(normalized)) / (np.nanmax(normalized) - np.nanmin(normalized))
         return normalized
 
     def load_hmi(self, start_time: Time, end_time: Time):
@@ -87,7 +89,7 @@ class DataLoader:
         hmi_coordinates_and_data = []
         hmi_times = []
 
-        for file in hmi_files:
+        for file in hmi_files[0:2]:
             hmi = map.Map(file)
 
             coordinates = map.all_coordinates_from_map(hmi)
@@ -129,12 +131,16 @@ class DataLoader:
         mean_data(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
         """
         first_file_path = next(Path(self.cfg.path_to_dkist_data).glob("*.fits"))
-        slit_1_data = fits.open(first_file_path)[1].data
+        slit_1_data = fits.open(first_file_path)[1].data[0]
+        # print("Shape of slit data", slit_1_data.shape)
 
         median_wavelength_data = np.nanmedian(slit_1_data, axis = 1) # median spectra for all slits and positions along slits
+        # print("Median_wavelength_data", median_wavelength_data.shape, median_wavelength_data)
 
-        threshold = np.percentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
+        threshold = np.nanpercentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
+        # print("threshold", threshold)
         wavelength_indicies = np.where(median_wavelength_data > threshold)[0] # gets the indicies of the median spectra is above the threshold
+        # print("wavelength indicies", wavelength_indicies)
 
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
@@ -149,12 +155,15 @@ class DataLoader:
         else:
             all_data = np.array(ds[:, :, :].data)
         
-        # print(all_data.shape)
+        print("Shape of all the data", all_data.shape)
+        print("Checks if there are any non nan values", not np.isnan(all_data).all())
  
         relevant_data = all_data[:, wavelength_indicies, :] # gets the data of all wavelengths across all slits for the indicies above the threshold
         print(50 * '-')
-        print(relevant_data.shape)
+        print("Shape of the relevant data", relevant_data.shape)
+        # print("relevant Data: ", relevant_data)
         print(50 * '-')
+        print("Checks if there are any non nan values", not np.isnan(relevant_data).all())
 
         mean_data = np.nanmean(relevant_data, axis = 1) # mean of the data across the wavelength samples above the threshold
         mean_data = self.normalize(mean_data)
@@ -243,7 +252,7 @@ class DataLoader:
 
         self.fixed_keywords, self.changing_keywords, self.fits_files = self.get_dkist_headers()
         self.start_time, self.end_time = self.get_time(self.changing_keywords)
-        self.intensities = self.get_dkist_wavelengths2()
+        self.intensities = self.get_dkist_wavelengths()
 
         hmi_coordinates_and_data, hmi_times = self.load_hmi(Time(self.start_time), Time(self.end_time))
 
@@ -772,7 +781,7 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = True
+    run = False
 
     print("Run =", run)
     
