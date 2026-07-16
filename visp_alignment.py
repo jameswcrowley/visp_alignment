@@ -123,11 +123,18 @@ class DataLoader:
     def get_dkist_wavelengths(self): #read in data step 1
         """
         Returns a 2D spatial intensity map where each pixel contains the average
-        intensity of the brightest/more intense wavelength samples (above 95th percentile) from the DKIST dataset.
+        intensity of the brightest/most intense wavelength samples (above 95th percentile) from the DKIST dataset.
         Returns:
         ----------
         mean_data(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
         """
+        first_file_path = next(Path(self.cfg.path_to_dkist_data).glob("*.fits"))
+        slit_1_data = fits.open(first_file_path)[1].data
+
+        median_wavelength_data = np.nanmedian(slit_1_data, axis = 1) # median spectra for all slits and positions along slits
+
+        threshold = np.percentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
+        wavelength_indicies = np.where(median_wavelength_data > threshold)[0] # gets the indicies of the median spectra is above the threshold
 
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
@@ -136,17 +143,13 @@ class DataLoader:
         #TODO: figure out how to optimize getting data from ds
         all_data = None
         if ds.wcs.pixel_n_dim == 4:
-            all_data = np.array(ds[0, :, :, :].data) # load all slits, slit positions, and wavelenghths of the dataset across the first Stoke
+            all_data = np.array(ds[0, :, :, :].data) # load all slits, slit positions, and wavelenghths of the dataset across the first Stoke/Raster
         elif ds.wcs.pixel_n_dim == 5:
             all_data = np.array(ds[0, 0, :, :, :].data) # load all slits, slit positions, and  wavelenghths of the dataset across the first Stoke and raster
         else:
             all_data = np.array(ds[:, :, :].data)
         
         # print(all_data.shape)
-        median_wavelength_data = np.nanmedian(all_data, axis = (0, 2)) # median spectra for all slits and positions along slits
-
-        threshold = np.percentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
-        wavelength_indicies = np.where(median_wavelength_data > threshold)[0] # gets the indicies of the median spectra is above the threshold
  
         relevant_data = all_data[:, wavelength_indicies, :] # gets the data of all wavelengths across all slits for the indicies above the threshold
         print(50 * '-')
@@ -192,7 +195,7 @@ class DataLoader:
         fixed_keywords(dict): A dictionary of fixed keywords {key: value}
         changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
-        fits_files = fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x]
+        fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x]
         
         header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
         fixed_keywords = {
@@ -769,15 +772,15 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = False
+    run = True
 
     print("Run =", run)
     
-    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
-    path_to_sunpy = "~/sunpy/data/"
+    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    # path_to_sunpy = "~/sunpy/data/"
 
-    # path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
-    # path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
+    path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
+    path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
 
     cfg = Config(
     path_to_dkist_data=path_to_dkist_data, 
