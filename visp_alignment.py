@@ -13,6 +13,7 @@ from scipy import interpolate as interp
 import scipy.optimize as opt
 from matplotlib.widgets import Button, Slider
 import matplotlib.patches as patches
+import bisect
 
 class Config:
     """
@@ -72,7 +73,6 @@ class DataLoader:
         start_time (Time): The start time of the interval
         end_time (Time): The end time of the interval
 
-        ** Currently only reads in middle file, not all related files **
         """
         search_results = Fido.search(
             a.Instrument.hmi,
@@ -84,22 +84,41 @@ class DataLoader:
             search_results, path=self.cfg.path_to_sunpy, progress=self.cfg.verbose, site="NSO"
         )
 
-        # read in the middle file using scipy.map to extract the coordinates and data.
-        # TODO: eventually need to read in all HMI files 
-        hmi = map.Map(hmi_files[len(hmi_files)//2])
+        hmi_coordinates_and_data = []
+        hmi_times = []
 
-        # read in the x and y coordinates as seperate arrays.
-        hmix = map.all_coordinates_from_map(hmi).Tx
-        hmiy = map.all_coordinates_from_map(hmi).Ty
+        for file in hmi_files:
+            hmi = map.Map(file)
+
+            coordinates = map.all_coordinates_from_map(hmi)
+
+            hmix = coordinates.Tx
+            hmiy = coordinates.Ty
+            
+            hmi_data = hmi.data
+
+            hmi_data = self.normalize(hmi_data)
+
+            image_time = Time(hmi.date)
+
+            hmi_coordinates_and_data.append((hmix, hmiy, hmi_data))
+
+            hmi_times.append(image_time)
         
-        # read in the intensity data as a 2D array.  
-        hmi_data = hmi.data
+        hmi_times = sorted(hmi_times)
 
-        hmi_data = self.normalize(hmi_data)
-
-        image_time = hmi.date
-
-        return hmix, hmiy, hmi_data, image_time
+        return hmi_coordinates_and_data, hmi_times
+    
+    def find_nearest_hmi(self, target, hmi_coordinates_and_data, hmi_times):
+        idx = bisect.bisect_left(hmi_times, target)
+        if idx == 0:
+            best = 0
+        elif idx == len(hmi_times):
+            best = idx - 1
+        else:
+            before, after = hmi_times[idx - 1], hmi_times[idx]
+            best = idx - 1 if (target - before) <= (after - target) else idx
+        return hmi_coordinates_and_data[best]
 
     def get_dkist_wavelengths(self): #read in data step 1
         """
@@ -223,7 +242,11 @@ class DataLoader:
         self.start_time, self.end_time = self.get_time(self.changing_keywords)
         self.intensities = self.get_dkist_wavelengths2()
 
-        self.hmix, self.hmiy, self.hmi_data, self.time = self.load_hmi(Time(self.start_time), Time(self.end_time))
+        hmi_coordinates_and_data, hmi_times = self.load_hmi(Time(self.start_time), Time(self.end_time))
+
+        middle_image_time = hmi_times[len(hmi_times)//2]
+
+        self.hmix, self.hmiy, self.hmi_data = self.find_nearest_hmi(middle_image_time, hmi_coordinates_and_data, hmi_times)
 
 class Alignment:
     """
@@ -378,11 +401,17 @@ class Alignment:
 
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(interpolator, coords_new)
 
-        # calculate the loss between the interpolated HMI data and the DKIST data. this could be something like mean squared error or mean absolute error. 
-        # I think eventually, we want to switch to the cross-correlation function to quantify the difference between the two datasets, but for now, this is a simple example.
+        x = HMI_interpolated_to_coords
+        y = data_numpy
 
-        # TODO: move to cross correlation
-        loss = np.nansum((HMI_interpolated_to_coords - data_numpy)**2)
+        mask = ~np.isnan(x) & ~np.isnan(y)
+        xv, yv = x[mask], y[mask]
+
+        xv = xv - np.mean(xv) 
+        yv = yv - np.mean(yv)
+        corr = np.sum(xv*yv) / np.sqrt(np.sum(xv*xv) * np.sum(yv*yv))
+
+        loss = -corr
 
         return loss
 
@@ -726,11 +755,12 @@ class Alignment:
         interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
         
         result = opt.minimize(self.loss_function, 
-                              initial_guess, 
-                              args=(self.data_loader.intensities, interpolator), 
-                              bounds=bounds, 
-                              method='Powell', 
-                              options={'maxiter': 200, 'disp': True})
+            initial_guess, 
+            args=(self.data_loader.intensities, interpolator), 
+            bounds=bounds, 
+            method='Powell', 
+            options={'maxiter': 200, 'disp': True}
+        )
 
         best_parameters = result.x
         
@@ -739,7 +769,7 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = True
+    run = False
 
     print("Run =", run)
     
@@ -793,7 +823,7 @@ if __name__ == "__main__":
         print('Best parameters found:', best_parameters)
 
     else:
-        best_parameters = [-1.02523844e+01,  1.22342979e+01, -4.36652273e-02,  9.43861732e-03, -2.58909492e-01,  1.87743852e-02]
+        best_parameters = [-5.00000517e+00,  6.92241086e+00, -7.59570122e-03, -4.62867902e-03, -1.41114322e-01,  2.45184961e-02]
 
     # assemble final coordinates
 
