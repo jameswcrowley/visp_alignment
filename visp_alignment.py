@@ -454,7 +454,6 @@ class Alignment:
         print("aligning by slit")
         final_coordinates = self.align_slit_by_slit(best_parameters, bounds)
         print("final coordinates determined")
-        final_coordinates = None
         
         return best_parameters, result, final_coordinates
     
@@ -527,11 +526,12 @@ if __name__ == "__main__":
     if run:
         best_parameters, success, final_coordinates = alignment.main(initial_guess, bounds)
 
-        print('Optimization converged:', success)
-        print('Best parameters found:', best_parameters)
+        # print('Optimization converged:', success)
+        # print('Best parameters found:', best_parameters)
 
     else:
         best_parameters = [-5.00000517e+00,  6.92241086e+00, -7.59570122e-03, -4.62867902e-03, -1.41114322e-01,  2.45184961e-02]
+
 
     # assemble final coordinates
 
@@ -541,6 +541,9 @@ if __name__ == "__main__":
     hmix, hmiy, hmi_data = alignment.find_nearest_hmi(middle_image_time, loader.hmi_coordinates_and_data, loader.hmi_times)
     relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
     interpolator = alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+
+    print(final_coordinates.shape)
+    print(final_coordinates)
 
     final_HMI_interpolated_onto_coords = alignment.interpolate_hmi_to_coords(interpolator, final_coordinates)
 
@@ -568,6 +571,8 @@ if __name__ == "__main__":
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities - final_HMI_interpolated_onto_coords, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
     plt.colorbar()
+
+    plt.savefig('my_plot.png', dpi=300, bbox_inches='tight')
 
     print("DONE")
 
