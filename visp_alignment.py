@@ -264,7 +264,7 @@ class Alignment:
             best = idx - 1 if (target - before) <= (after - target) else idx
         return hmi_coordinates_and_data[best]
     
-    def construct_dkist_coords(self, fixed_keywords, changing_keywords, parameters = (0, 0, 0, 0, 0, 0)):
+    def construct_dkist_coords(self, fixed_keywords, changing_keywords, parameters = (0, 0, 0, 0, 0, 0), i = None):
         """
         This function constructs the default coordinates of the DKIST data from the fits files. 
         It returns a 3D array of the coordinates, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
@@ -301,7 +301,12 @@ class Alignment:
 
         coords = np.zeros((nx, ny, 2))
 
-        i = np.arange(nx)[:, None] + 1
+        if i is None:
+            i = np.arange(nx)[:, None] + 1
+            
+        else:
+            i = i
+
         j = np.arange(ny)[None, :] + 1
 
         #TODO: Figure out what to do about raster repeats
@@ -447,9 +452,14 @@ class Alignment:
 
         # hmix, hmiy, hmi_data = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_coordinates_and_data, self.data_loader.hmi_times)
 
-        best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, self.data_loader.middle_hmix, self.data_loader.middle_hmiy, self.data_loader.middle_hmi_data)
+        #best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, self.data_loader.middle_hmix, self.data_loader.middle_hmiy, self.data_loader.middle_hmi_data)
+        best_parameters = [-5.00000517e+00,  6.92241086e+00, -7.59570122e-03, -4.62867902e-03, -1.41114322e-01,  2.45184961e-02]
+        result = True
+        bounds = [(best_parameters[0] - 5, best_parameters[0] + 5), (best_parameters[1] - 5, best_parameters[1] + 5), (best_parameters[2], best_parameters[2]), (best_parameters[3], best_parameters[3]), (best_parameters[4], best_parameters[4]), (best_parameters[5], best_parameters[5])]
         
-        print("done with rought alignment getting all hmi")
+        #best_parameters = initial_guess
+
+        print("done with roughz alignment getting all hmi")
         self.data_loader.get_all_hmi(self.data_loader.hmi_files)
         print("aligning by slit")
         final_coordinates = self.align_slit_by_slit(best_parameters, bounds)
@@ -457,8 +467,8 @@ class Alignment:
         
         return best_parameters, result, final_coordinates
     
-    def align(self, initial_guess, bounds, changing_keywords, intensities, hmix, hmiy, hmi_data, delta = 20):
-        initial_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, initial_guess)
+    def align(self, initial_guess, bounds, changing_keywords, intensities, hmix, hmiy, hmi_data, delta = 20, i = None):
+        initial_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, initial_guess, i = i)
         relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(initial_coordinates, hmix, hmiy, hmi_data, delta)
         interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
         
@@ -486,8 +496,8 @@ class Alignment:
             slit_time = Time(slit_keywords["DATE-AVG"])
             slit_intensities = self.data_loader.intensities[i:i+1, :]
             hmix, hmiy, hmi_data = self.find_nearest_hmi(slit_time, self.data_loader.hmi_coordinates_and_data, self.data_loader.hmi_times)
-            best_parameters, result = self.align(initial_guess, bounds, slit_keywords, slit_intensities, hmix, hmiy, hmi_data, delta = 2)
-            coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters)
+            best_parameters, result = self.align(initial_guess, bounds, slit_keywords, slit_intensities, hmix, hmiy, hmi_data, delta = 2, i = i)
+            coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters, i = i)
             final_coordinates[i] = coords[0]
 
         return final_coordinates
@@ -498,7 +508,8 @@ if __name__ == "__main__":
 
     print("Run =", run)
     
-    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
 
     # path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
