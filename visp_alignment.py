@@ -94,29 +94,16 @@ class DataLoader:
 
         return middle_hmix, middle_hmiy, middle_hmi_data, hmi_files
     
-    def get_all_hmi(self, hmi_files):
-        hmi_coordinates_and_data = []
+    def get_all_hmi_times(self, hmi_files):
         hmi_times = []
 
         for file in hmi_files:
             hmi = map.Map(file)
-
-            coordinates = map.all_coordinates_from_map(hmi)
-
-            hmix = coordinates.Tx
-            hmiy = coordinates.Ty
             
-            hmi_data = hmi.data
-
-            hmi_data = self.normalize(hmi_data)
-
             image_time = Time(hmi.date)
-
-            hmi_coordinates_and_data.append((hmix, hmiy, hmi_data))
 
             hmi_times.append(image_time)
 
-        self.hmi_coordinates_and_data = hmi_coordinates_and_data
         self.hmi_times = hmi_times
 
     def get_dkist_wavelengths(self): #read in data step 1
@@ -253,7 +240,7 @@ class Alignment:
         self.cfg = cfg
         self.data_loader = data_loader
 
-    def find_nearest_hmi(self, target, hmi_coordinates_and_data, hmi_times):
+    def find_nearest_hmi(self, target, hmi_files, hmi_times):
         idx = bisect.bisect_left(hmi_times, target)
         if idx == 0:
             best = 0
@@ -262,7 +249,22 @@ class Alignment:
         else:
             before, after = hmi_times[idx - 1], hmi_times[idx]
             best = idx - 1 if (target - before) <= (after - target) else idx
-        return hmi_coordinates_and_data[best]
+        return best
+    
+    def get_hmi(self, hmi_files, i):
+
+        hmi = map.Map(hmi_files[i])
+
+        coordinates = map.all_coordinates_from_map(hmi)
+
+        hmix = coordinates.Tx
+        hmiy = coordinates.Ty
+        
+        hmi_data = hmi.data
+
+        hmi_data = loader.normalize(hmi_data)
+
+        return hmix, hmiy, hmi_data
     
     def construct_dkist_coords(self, fixed_keywords, changing_keywords, parameters = (0, 0, 0, 0, 0, 0), i = None):
         """
@@ -459,8 +461,8 @@ class Alignment:
         
         #best_parameters = initial_guess
 
-        print("done with roughz alignment getting all hmi")
-        self.data_loader.get_all_hmi(self.data_loader.hmi_files)
+        print("done with roughz alignment getting all hmi times")
+        self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
         print("aligning by slit")
         final_coordinates = self.align_slit_by_slit(best_parameters, bounds)
         print("final coordinates determined")
@@ -491,11 +493,18 @@ class Alignment:
 
         final_coordinates = np.zeros((nx, ny, 2))
 
+        current_hmi_image_index = -1
+
+        hmix, hmiy, hmi_data = None, None, None
+
         for i in range(nx):
             slit_keywords = {key: [values[i]] for key, values in self.data_loader.changing_keywords.items()}
             slit_time = Time(slit_keywords["DATE-AVG"][0])
             slit_intensities = self.data_loader.intensities[i:i+1, :]
-            hmix, hmiy, hmi_data = self.find_nearest_hmi(slit_time, self.data_loader.hmi_coordinates_and_data, self.data_loader.hmi_times)
+            best_hmi_index = self.find_nearest_hmi(slit_time, self.data_loader.hmi_files, self.data_loader.hmi_times)
+            if best_hmi_index != current_hmi_image_index:
+                current_hmi_image_index = best_hmi_index
+                hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, current_hmi_image_index)
             best_parameters, result = self.align(initial_guess, bounds, slit_keywords, slit_intensities, hmix, hmiy, hmi_data, delta = 2, i = i)
             coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters, i = i)
             final_coordinates[i] = coords[0]
@@ -549,7 +558,8 @@ if __name__ == "__main__":
     coords_new = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, best_parameters)
 
     middle_image_time = loader.hmi_times[len(loader.hmi_times)//2]
-    hmix, hmiy, hmi_data = alignment.find_nearest_hmi(middle_image_time, loader.hmi_coordinates_and_data, loader.hmi_times)
+    best_idx = alignment.find_nearest_hmi(middle_image_time, loader.hmi_files, loader.hmi_times)
+    hmix, hmiy, hmi_data = alignment.get_hmi(loader.hmi_files, best_idx)
     relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
     interpolator = alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
 
