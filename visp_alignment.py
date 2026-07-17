@@ -305,7 +305,7 @@ class Alignment:
             i = np.arange(nx)[:, None] + 1
             
         else:
-            i = i
+            i = i + 1
 
         j = np.arange(ny)[None, :] + 1
 
@@ -399,7 +399,7 @@ class Alignment:
 
         return HMI_interpolated_to_coords
 
-    def loss_function(self, parameters, changing_keywords, data_numpy, interpolator):
+    def loss_function(self, parameters, changing_keywords, data_numpy, interpolator, i):
         """
         This function calculates the loss between the interpolated HMI data and the DKIST data.
         It returns the loss value - here, I chose to use the sum of squared differences to quantify the difference between the two datasets, but other metrics could be used as well.
@@ -415,7 +415,7 @@ class Alignment:
         loss (float): the loss value between the interpolated HMI data and the DKIST data.
         """
         # shift the DKIST coordinates based on the input parameters, identify the relevant HMI data that overlaps with the DKIST data, and interpolate the HMI data onto the DKIST coordinates.
-        coords_new = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, parameters)
+        coords_new = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, parameters, i=i)
 
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(interpolator, coords_new)
 
@@ -474,7 +474,7 @@ class Alignment:
         
         result = opt.minimize(self.loss_function, 
             initial_guess, 
-            args=(changing_keywords, intensities, interpolator), 
+            args=(changing_keywords, intensities, interpolator, i), 
             bounds=bounds, 
             method='Powell', 
             options={'maxiter': 200, 'disp': True}
@@ -493,7 +493,7 @@ class Alignment:
 
         for i in range(nx):
             slit_keywords = {key: [values[i]] for key, values in self.data_loader.changing_keywords.items()}
-            slit_time = Time(slit_keywords["DATE-AVG"])
+            slit_time = Time(slit_keywords["DATE-AVG"][0])
             slit_intensities = self.data_loader.intensities[i:i+1, :]
             hmix, hmiy, hmi_data = self.find_nearest_hmi(slit_time, self.data_loader.hmi_coordinates_and_data, self.data_loader.hmi_times)
             best_parameters, result = self.align(initial_guess, bounds, slit_keywords, slit_intensities, hmix, hmiy, hmi_data, delta = 2, i = i)
@@ -508,8 +508,8 @@ if __name__ == "__main__":
 
     print("Run =", run)
     
-    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
-    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
+    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    # path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
 
     # path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
