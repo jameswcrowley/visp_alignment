@@ -457,10 +457,10 @@ class Alignment:
         #best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, self.data_loader.middle_hmix, self.data_loader.middle_hmiy, self.data_loader.middle_hmi_data)
         best_parameters = [-5.00000517e+00,  6.92241086e+00, -7.59570122e-03, -4.62867902e-03, -1.41114322e-01,  2.45184961e-02]
         result = True
-        bounds = [(best_parameters[0] - 5, best_parameters[0] + 5), (best_parameters[1] - 5, best_parameters[1] + 5), (best_parameters[2], best_parameters[2]), (best_parameters[3], best_parameters[3]), (best_parameters[4], best_parameters[4]), (best_parameters[5], best_parameters[5])]
+        bounds = [(best_parameters[0] - 1, best_parameters[0] + 1), (best_parameters[1] - 1, best_parameters[1] + 1), (best_parameters[2], best_parameters[2]), (best_parameters[3], best_parameters[3]), (best_parameters[4], best_parameters[4]), (best_parameters[5], best_parameters[5])]
         
         #best_parameters = initial_guess
-
+ 
         print("done with roughz alignment getting all hmi times")
         self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
         print("aligning by slit")
@@ -497,24 +497,30 @@ class Alignment:
 
         hmix, hmiy, hmi_data = None, None, None
 
+        last_best = initial_guess
+
         for i in range(nx):
             slit_keywords = {key: [values[i]] for key, values in self.data_loader.changing_keywords.items()}
             slit_time = Time(slit_keywords["DATE-AVG"][0])
             slit_intensities = self.data_loader.intensities[i:i+1, :]
+
             best_hmi_index = self.find_nearest_hmi(slit_time, self.data_loader.hmi_files, self.data_loader.hmi_times)
             if best_hmi_index != current_hmi_image_index:
                 current_hmi_image_index = best_hmi_index
                 hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, current_hmi_image_index)
-            best_parameters, result = self.align(initial_guess, bounds, slit_keywords, slit_intensities, hmix, hmiy, hmi_data, delta = 2, i = i)
-            coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters, i = i)
-            final_coordinates[i] = coords[0]
 
-        return final_coordinates
+            best_parameters, result = self.align(last_best, bounds, slit_keywords, slit_intensities, hmix, hmiy, hmi_data, delta = 20, i = i)
+            last_best = best_parameters 
+            
+            coords = self.construct_dkist_coords (self.data_loader.fixed_keywords, slit_keywords, best_parameters, i = i)
+            final_coordinates[i] = coords[0] 
+
+        return final_coordinates 
 
 if __name__ == "__main__":
 
     run = True
-
+ 
     print("Run =", run)
     
     path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
