@@ -89,7 +89,7 @@ class DataLoader:
         hmi_coordinates_and_data = []
         hmi_times = []
 
-        for file in hmi_files[0:2]:
+        for file in hmi_files:
             hmi = map.Map(file)
 
             coordinates = map.all_coordinates_from_map(hmi)
@@ -98,8 +98,6 @@ class DataLoader:
             hmiy = coordinates.Ty
             
             hmi_data = hmi.data
-
-            hmi_data = self.normalize(hmi_data)
 
             image_time = Time(hmi.date)
 
@@ -321,7 +319,7 @@ class Alignment:
     def identify_relevant_hmi_data(self, coords, hmix, hmiy, hmi_data, delta = 20):
         """
         This function identifies the relevant HMI data that overlaps with the DKIST data, with a buffer of delta arcseconds on each side. 
-        It returns the x and y coordinates of the relevant HMI data, as well as the intensity data.
+        It returns the x and y coordinates of the relevant HMI data, as well as the normalized intensity data.
         
         Parameters:
         -----------
@@ -347,6 +345,7 @@ class Alignment:
 
         # crop the HMI data to the relevant coordinates. Note that the HMI data is transposed because the x and y coordinates are in the opposite order of the data array.
         relevant_hmi_data= hmi_data.T[relevant_hmix_indices[0]:relevant_hmix_indices[1], relevant_hmiy_indices[0]:relevant_hmiy_indices[1]].T
+        relevant_hmi_data = self.data_loader.normalize(relevant_hmi_data)
 
         return relevant_hmix, relevant_hmiy, relevant_hmi_data
     
@@ -849,7 +848,7 @@ if __name__ == "__main__":
     plt.subplot(2,2,1)
     plt.title('Original DKIST data overlayed over original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap = 'plasma')
+    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 0.8)
     plt.colorbar()
 
     plt.subplot(2,2,2)
@@ -861,7 +860,7 @@ if __name__ == "__main__":
     plt.subplot(2,2,3)
     plt.title('Aligned DKIST data overlaid on original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 1)
+    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 0.8)
     plt.colorbar()
 
     plt.subplot(2,2,4)
