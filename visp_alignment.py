@@ -11,8 +11,6 @@ import dkist
 import os
 from scipy import interpolate as interp
 import scipy.optimize as opt
-from matplotlib.widgets import Button, Slider
-import matplotlib.patches as patches
 import bisect
 
 class Config:
@@ -89,7 +87,7 @@ class DataLoader:
         hmi_coordinates_and_data = []
         hmi_times = []
 
-        for file in hmi_files:
+        for file in hmi_files[0:2]:
             hmi = map.Map(file)
 
             coordinates = map.all_coordinates_from_map(hmi)
@@ -202,7 +200,7 @@ class DataLoader:
         fixed_keywords(dict): A dictionary of fixed keywords {key: value}
         changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
-        fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x]
+        fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x and '_I_' in x]
         
         header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
         fixed_keywords = {
@@ -298,7 +296,8 @@ class Alignment:
 
         coords = np.zeros((nx, ny, 2))
 
-        i = np.arange(nx)[:, None] + 1
+        #i = np.arange(nx)[:, None] + 1
+        i = np.ones(nx)[:, None]
         j = np.arange(ny)[None, :] + 1
 
         #TODO: Figure out what to do about raster repeats
@@ -425,326 +424,6 @@ class Alignment:
         loss = -corr
 
         return loss
-
-    def initial_guess_gui(
-            self,
-            initial_parameters,
-            fixed_keywords,
-            changing_keywords,
-            coords,
-            hmix,
-            hmiy,
-            hmi_data,
-    ):
-        """
-        Manual alignment GUI.
-
-        User adjusts:
-            CRVAL1 shift
-            CRVAL3 shift
-            PC1_1 shift
-            PC3_1 shift
-            PC1_3 shift
-            PC3_3 shift
-
-        GUI previews resulting coordinate grid in real time.
-        """
-
-        if len(initial_parameters) != 6:
-            raise ValueError("initial_parameters must contain 6 values")
-
-        data_to_plot = self.data_loader.intensities
-        hmix = np.asarray(hmix)
-        hmiy = np.asarray(hmiy)
-        hmi_data = np.asarray(hmi_data)
-
-        if hmix.ndim == 2:
-            hmix_axis = hmix[0, :]
-        else:
-            hmix_axis = hmix
-
-        if hmiy.ndim == 2:
-            hmiy_axis = hmiy[:, 0]
-        else:
-            hmiy_axis = hmiy
-
-        if hmix_axis[0] > hmix_axis[-1]:
-            hmix_axis = hmix_axis[::-1]
-            hmi_data = np.flip(hmi_data, axis=1)
-
-        if hmiy_axis[0] > hmiy_axis[-1]:
-            hmiy_axis = hmiy_axis[::-1]
-            hmi_data = np.flip(hmi_data, axis=0)
-
-        hmi_extent = [
-            float(hmix_axis[0]),
-            float(hmix_axis[-1]),
-            float(hmiy_axis[0]),
-            float(hmiy_axis[-1]),
-        ]
-
-        def build_mesh_coordinates(center_coords):
-            padded = np.empty((center_coords.shape[0] + 2, center_coords.shape[1] + 2, 2))
-            padded[1:-1, 1:-1] = center_coords
-            padded[0, 1:-1] = 2 * center_coords[0, :, :] - center_coords[1, :, :]
-            padded[-1, 1:-1] = 2 * center_coords[-1, :, :] - center_coords[-2, :, :]
-            padded[1:-1, 0] = 2 * center_coords[:, 0, :] - center_coords[:, 1, :]
-            padded[1:-1, -1] = 2 * center_coords[:, -1, :] - center_coords[:, -2, :]
-            padded[0, 0] = 2 * padded[1, 0] - padded[2, 0]
-            padded[0, -1] = 2 * padded[1, -1] - padded[2, -1]
-            padded[-1, 0] = 2 * padded[-2, 0] - padded[-3, 0]
-            padded[-1, -1] = 2 * padded[-2, -1] - padded[-3, -1]
-            return 0.25 * (
-                padded[:-1, :-1]
-                + padded[:-1, 1:]
-                + padded[1:, :-1]
-                + padded[1:, 1:]
-            )
-
-        def update_quadmesh(mesh, mesh_coords, alpha):
-            if hasattr(mesh, "_coordinates"):
-                mesh._coordinates = mesh_coords
-            else:
-                mesh.get_coordinates()[:] = mesh_coords
-            mesh.set_alpha(alpha)
-            mesh.stale = True
-
-        mesh_coordinates = build_mesh_coordinates(coords)
-
-        parameter_names = [
-            "CRVAL1",
-            "CRVAL3",
-            "PC1_1",
-            "PC3_1",
-            "PC1_3",
-            "PC3_3",
-        ]
-
-        fig, axd = plt.subplot_mosaic(
-            """
-            AAAA.CC
-            BBBB.CC
-            """,
-            figsize=(14, 8)
-        )
-
-        ax_context = axd["A"]
-        ax_zoom = axd["B"]
-        ax_controls = axd["C"]
-
-        ax_controls.axis("off")
-
-        #########################################################
-        # HMI BACKGROUND
-        #########################################################
-
-        hmi_context = ax_context.imshow(
-            hmi_data[::8, ::8],
-            extent=hmi_extent,
-            origin="lower",
-            cmap="gray"
-        )
-
-        hmi_zoom = ax_zoom.imshow(
-            hmi_data[::2, ::2],
-            extent=hmi_extent,
-            origin="lower",
-            cmap="gray"
-        )
-
-        ax_context.set_xlim(hmi_extent[0], hmi_extent[1])
-        ax_context.set_ylim(hmi_extent[2], hmi_extent[3])
-        ax_zoom.set_ylim(hmi_extent[2], hmi_extent[3])
-
-        #########################################################
-        # INITIAL DKIST OVERLAY
-        #########################################################
-
-        mesh_context = ax_context.pcolormesh(
-            mesh_coordinates[:, :, 0],
-            mesh_coordinates[:, :, 1],
-            data_to_plot,
-            cmap="plasma",
-            alpha=0.5,
-            shading="flat"
-        )
-
-        mesh_zoom = ax_zoom.pcolormesh(
-            mesh_coordinates[:, :, 0],
-            mesh_coordinates[:, :, 1],
-            data_to_plot,
-            cmap="plasma",
-            alpha=0.5,
-            shading="flat"
-        )
-
-        def set_zoom_limits(current_coords, padding=10):
-            ax_zoom.set_xlim(
-                float(np.nanmin(current_coords[:, :, 0]) - padding),
-                float(np.nanmax(current_coords[:, :, 0]) + padding),
-            )
-            ax_zoom.set_ylim(
-                float(np.nanmin(current_coords[:, :, 1]) - padding),
-                float(np.nanmax(current_coords[:, :, 1]) + padding),
-            )
-
-        set_zoom_limits(coords)
-
-        #########################################################
-        # SLIDERS
-        #########################################################
-
-        sliders = {}
-
-        slider_ranges = {
-            "CRVAL1": (-100, 100),
-            "CRVAL3": (-100, 100),
-            "PC1_1": (-0.5, 0.5),
-            "PC3_1": (-0.5, 0.5),
-            "PC1_3": (-0.5, 0.5),
-            "PC3_3": (-0.5, 0.5),
-        }
-
-        for i, (name, initial_value) in enumerate(
-                zip(parameter_names, initial_parameters)):
-
-            ymin = 0.85 - i * 0.08
-
-            ax_slider = fig.add_axes(
-                [0.68, ymin, 0.25, 0.03]
-            )
-
-            lo, hi = slider_ranges[name]
-
-            sliders[name] = Slider(
-                ax=ax_slider,
-                label=name,
-                valmin=lo,
-                valmax=hi,
-                valinit=initial_value
-            )
-
-        #########################################################
-        # OVERLAY OPACITY CONTROL
-        #########################################################
-
-        zoom_position = ax_zoom.get_position()
-        clim_ax = fig.add_axes([
-            zoom_position.x0 - 0.035,
-            zoom_position.y0,
-            0.02,
-            zoom_position.height,
-        ])
-
-        intensity_slider = Slider(
-            clim_ax,
-            "Alpha",
-            0.0,
-            1.0,
-            valinit=0.5,
-            orientation="vertical"
-        )
-
-        def update_alpha(val):
-            current_mesh_context.set_alpha(val)
-            current_mesh_zoom.set_alpha(val)
-            fig.canvas.draw_idle()
-
-        intensity_slider.on_changed(update_alpha)
-
-        #########################################################
-        # UPDATE FUNCTION
-        #########################################################
-
-        current_mesh_context = mesh_context
-        current_mesh_zoom = mesh_zoom
-
-        def update(val):
-
-            nonlocal current_mesh_context
-            nonlocal current_mesh_zoom
-
-            parameters = (
-                sliders["CRVAL1"].val,
-                sliders["CRVAL3"].val,
-                sliders["PC1_1"].val,
-                sliders["PC3_1"].val,
-                sliders["PC1_3"].val,
-                sliders["PC3_3"].val,
-            )
-
-            coords_new = self.construct_dkist_coords(
-                fixed_keywords,
-                changing_keywords,
-                parameters
-            )
-            mesh_coordinates_new = build_mesh_coordinates(coords_new)
-
-            update_quadmesh(current_mesh_context, mesh_coordinates_new, intensity_slider.val)
-            update_quadmesh(current_mesh_zoom, mesh_coordinates_new, intensity_slider.val)
-            set_zoom_limits(coords_new)
-
-            fig.canvas.draw_idle()
-
-        #########################################################
-        # HOOK UP CALLBACKS
-        #########################################################
-
-        for slider in sliders.values():
-            slider.on_changed(update)
-
-        #########################################################
-        # RESET BUTTON
-        #########################################################
-
-        reset_ax = fig.add_axes([0.65, 0.02, 0.1, 0.04])
-
-        reset_button = Button(
-            reset_ax,
-            "Reset"
-        )
-
-        def reset(event):
-            for slider in sliders.values():
-                slider.reset()
-
-        reset_button.on_clicked(reset)
-
-        #########################################################
-        # DONE BUTTON
-        #########################################################
-
-        result = tuple(initial_parameters)
-
-        done_ax = fig.add_axes([0.80, 0.02, 0.1, 0.04])
-
-        done_button = Button(
-            done_ax,
-            "Done"
-        )
-
-        def done(event):
-
-            nonlocal result
-
-            result = (
-                sliders["CRVAL1"].val,
-                sliders["CRVAL3"].val,
-                sliders["PC1_1"].val,
-                sliders["PC3_1"].val,
-                sliders["PC1_3"].val,
-                sliders["PC3_3"].val,
-            )
-
-            plt.close(fig)
-
-        done_button.on_clicked(done)
-
-        plt.show()
-
-        return result
-
-
     
     def align(self, initial_guess, bounds):
         """
@@ -780,15 +459,18 @@ class Alignment:
 
 if __name__ == "__main__":
 
-    run = False
+    run = True
 
     print("Run =", run)
     
     # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
     # path_to_sunpy = "~/sunpy/data/"
 
-    path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
-    path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
+    #path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
+    #path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
+    
+    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
+    path_to_sunpy = "~/sunpy/data/"
 
     cfg = Config(
     path_to_dkist_data=path_to_dkist_data, 
