@@ -23,7 +23,7 @@ class Config:
         path_to_dkist_data: str,
         path_to_sunpy: str,
         wavelength_index = None,
-        use_gui = True,
+        use_gui = False,
         verbose = False
     ):
         self.path_to_dkist_data = path_to_dkist_data
@@ -53,7 +53,7 @@ class DataLoader:
         ---------
         tuple: A tuple containing the start and end times of the DKIST data in the folder
         """
-        return (changing_keywords["DATE-AVG"][0], changing_keywords["DATE-AVG"][-1])
+        return (changing_keywords["DATE-AVG"][0], changing_keywords["DATE-AVG"][1500])
 
     def normalize(self, arr):
         normalized = arr
@@ -236,7 +236,7 @@ class DataLoader:
 
         self.fixed_keywords, self.changing_keywords, self.fits_files = self.get_dkist_headers()
         self.start_time, self.end_time = self.get_time(self.changing_keywords)
-        self.intensities = self.get_dkist_wavelengths()
+        self.intensities = self.get_dkist_wavelengths2()
 
         self.middle_hmix, self.middle_hmiy, self.middle_hmi_data, self.hmi_files = self.load_hmi(Time(self.start_time), Time(self.end_time))
 
@@ -301,13 +301,7 @@ class Alignment:
         pc3_1 = fixed_keywords['PC3_1'] + pc3_1_shift
         pc3_3 = fixed_keywords['PC3_3'] + pc3_3_shift
 
-        # TODO: make this work maybe with different sized chunks of data/more robust
-        nx = -1
-        if len(changing_keywords["CRVAL1"]) > fixed_keywords['DNAXIS3']:
-            nx = fixed_keywords['DNAXIS3']
-        else:
-            nx = len(changing_keywords["CRVAL1"])
-
+        nx = fixed_keywords['DNAXIS3']
         ny = fixed_keywords['DNAXIS1']
 
         coords = np.zeros((nx, ny, 2))
@@ -466,7 +460,7 @@ class Alignment:
         # hmix, hmiy, hmi_data = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_coordinates_and_data, self.data_loader.hmi_times)
 
         #best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, self.data_loader.middle_hmix, self.data_loader.middle_hmiy, self.data_loader.middle_hmi_data)
-        best_parameters = [-5.00000517e+00,  6.92241086e+00, -7.59570122e-03, -4.62867902e-03, -1.41114322e-01,  2.45184961e-02]
+        best_parameters = [-1.60380959e+00,  1.01922364e+01, -9.42824916e-04, -1.06372480e-02, 2.33890820e-02,  1.35416594e-02]
         result = True
         bounds = [(best_parameters[0] - 1, best_parameters[0] + 1), (best_parameters[1] - 1, best_parameters[1] + 1), (best_parameters[2], best_parameters[2]), (best_parameters[3], best_parameters[3]), (best_parameters[4], best_parameters[4]), (best_parameters[5], best_parameters[5])]
         
@@ -541,9 +535,6 @@ if __name__ == "__main__":
     #path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
     #path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
     
-    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
-    path_to_sunpy = "~/sunpy/data/"
-
     cfg = Config(
     path_to_dkist_data=path_to_dkist_data, 
     path_to_sunpy=path_to_sunpy, 
