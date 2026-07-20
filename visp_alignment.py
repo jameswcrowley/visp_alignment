@@ -57,10 +57,6 @@ class DataLoader:
 
     def normalize(self, arr):
         normalized = arr
-        # # normalized -= np.nanmean(normalized)
-        # # normalized /= np.nanstd(normalized)
-        # normalized /= np.nanmax(normalized)
-        # return normalized
         normalized = (normalized- np.nanmedian(normalized)) / (np.nanmax(normalized) - np.nanmin(normalized))
         return normalized
 
@@ -516,7 +512,7 @@ if __name__ == "__main__":
         print('Best parameters found:', best_parameters)
 
     else:
-        best_parameters = [-5.00000517e+00,  6.92241086e+00, -7.59570122e-03, -4.62867902e-03, -1.41114322e-01,  2.45184961e-02]
+        best_parameters = [-1.60380959e+00,  1.01922364e+01, -9.42824916e-04, -1.06372480e-02, 2.33890820e-02,  1.35416594e-02]
 
     # assemble final coordinates
 
