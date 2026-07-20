@@ -23,13 +23,11 @@ class Config:
         path_to_dkist_data: str,
         path_to_sunpy: str,
         wavelength_index = None,
-        use_gui = True,
         verbose = False
     ):
         self.path_to_dkist_data = path_to_dkist_data
         self.path_to_sunpy = path_to_sunpy
         self.wavelength_index = wavelength_index
-        self.use_gui = use_gui
         self.verbose = verbose
         
 
@@ -488,24 +486,9 @@ if __name__ == "__main__":
 
 
     if run:
-        if cfg.use_gui:
-            # Testing GUI:
-            initial_guess = alignment.initial_guess_gui([0, 0, 0, 0, 0, 0], 
-                                        loader.fixed_keywords, 
-                                        loader.changing_keywords,
-                                        original_dkist_coords,
-                                        loader.hmix.value,
-                                        loader.hmiy.value,
-                                        loader.hmi_data)
-            print("Initial guess from GUI:", initial_guess)
+        initial_guess = [-10, 15, 0, 0, 0, 0]
 
-        else:
-            initial_guess = [-10, 15, 0, 0, 0, 0]
-        
-        
-        print("Moving on to final alignment.")
-
-        bounds = [(-20, 0), (0, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
+        bounds = [(-30, 30), (-30, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
         best_parameters, success = alignment.align(initial_guess, bounds)
 
         print('Optimization converged:', success)
