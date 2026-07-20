@@ -7,8 +7,6 @@ import astropy.units as u
 import matplotlib.pyplot as plt
 from sunpy.net import Fido, attrs as a
 from sunpy import map as map
-import sunpy.data.sample
-import dkist.net
 import dkist
 import os
 from scipy import interpolate as interp
@@ -25,12 +23,15 @@ class Config:
         path_to_dkist_data: str,
         path_to_sunpy: str,
         wavelength_index = None,
+        use_gui = True,
         verbose = False
     ):
         self.path_to_dkist_data = path_to_dkist_data
         self.path_to_sunpy = path_to_sunpy
-        self.verbose = verbose
         self.wavelength_index = wavelength_index
+        self.use_gui = use_gui
+        self.verbose = verbose
+        
 
 
 
@@ -56,9 +57,7 @@ class DataLoader:
 
     def normalize(self, arr):
         normalized = arr
-        # normalized -= np.nanmean(normalized)
-        # normalized /= np.nanstd(normalized)
-        normalized /= np.nanmax(normalized)
+        normalized = (normalized- np.nanmedian(normalized)) / (np.nanmax(normalized) - np.nanmin(normalized))
         return normalized
 
     def load_hmi(self, start_time: Time, end_time: Time):
@@ -109,11 +108,22 @@ class DataLoader:
     def get_dkist_wavelengths(self): #read in data step 1
         """
         Returns a 2D spatial intensity map where each pixel contains the average
-        intensity of the brightest/more intense wavelength samples (above 95th percentile) from the DKIST dataset.
+        intensity of the brightest/most intense wavelength samples (above 95th percentile) from the DKIST dataset.
         Returns:
         ----------
         mean_data(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
         """
+        first_file_path = next(Path(self.cfg.path_to_dkist_data).glob("*.fits"))
+        slit_1_data = fits.open(first_file_path)[1].data[0]
+        # print("Shape of slit data", slit_1_data.shape)
+
+        median_wavelength_data = np.nanmedian(slit_1_data, axis = 1) # median spectra for all slits and positions along slits
+        # print("Median_wavelength_data", median_wavelength_data.shape, median_wavelength_data)
+
+        threshold = np.nanpercentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
+        # print("threshold", threshold)
+        wavelength_indicies = np.where(median_wavelength_data > threshold)[0] # gets the indicies of the median spectra is above the threshold
+        # print("wavelength indicies", wavelength_indicies)
 
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
@@ -122,22 +132,21 @@ class DataLoader:
         #TODO: figure out how to optimize getting data from ds
         all_data = None
         if ds.wcs.pixel_n_dim == 4:
-            all_data = np.array(ds[0, :, :, :].data) # load all slits, slit positions, and wavelenghths of the dataset across the first Stoke
+            all_data = np.array(ds[0, :, :, :].data) # load all slits, slit positions, and wavelenghths of the dataset across the first Stoke/Raster
         elif ds.wcs.pixel_n_dim == 5:
             all_data = np.array(ds[0, 0, :, :, :].data) # load all slits, slit positions, and  wavelenghths of the dataset across the first Stoke and raster
         else:
             all_data = np.array(ds[:, :, :].data)
         
-        # print(all_data.shape)
-        median_wavelength_data = np.nanmedian(all_data, axis = (0, 2)) # median spectra for all slits and positions along slits
-
-        threshold = np.percentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
-        wavelength_indicies = np.where(median_wavelength_data > threshold)[0] # gets the indicies of the median spectra is above the threshold
+        print("Shape of all the data", all_data.shape)
+        print("Checks if there are any non nan values", not np.isnan(all_data).all())
  
         relevant_data = all_data[:, wavelength_indicies, :] # gets the data of all wavelengths across all slits for the indicies above the threshold
         print(50 * '-')
-        print(relevant_data.shape)
+        print("Shape of the relevant data", relevant_data.shape)
+        # print("relevant Data: ", relevant_data)
         print(50 * '-')
+        print("Checks if there are any non nan values", not np.isnan(relevant_data).all())
 
         mean_data = np.nanmean(relevant_data, axis = 1) # mean of the data across the wavelength samples above the threshold
         mean_data = self.normalize(mean_data)
@@ -179,7 +188,7 @@ class DataLoader:
         fixed_keywords(dict): A dictionary of fixed keywords {key: value}
         changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
-        fits_files = fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x]
+        fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x and '_I_' in x]
         
         header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
         fixed_keywords = {
@@ -227,7 +236,7 @@ class DataLoader:
 
         self.fixed_keywords, self.changing_keywords, self.fits_files = self.get_dkist_headers()
         self.start_time, self.end_time = self.get_time(self.changing_keywords)
-        self.intensities = self.get_dkist_wavelengths2()
+        self.intensities = self.get_dkist_wavelengths()
 
         self.middle_hmix, self.middle_hmiy, self.middle_hmi_data, self.hmi_files = self.load_hmi(Time(self.start_time), Time(self.end_time))
 
@@ -304,11 +313,12 @@ class Alignment:
         coords = np.zeros((nx, ny, 2))
 
         if i is None:
-            i = np.arange(nx)[:, None] + 1
+            i = np.ones(nx)[:, None]
             
         else:
-            i = i + 1
+            i = 1
 
+        #i = np.arange(nx)[:, None] + 1
         j = np.arange(ny)[None, :] + 1
 
         #TODO: Figure out what to do about raster repeats
@@ -317,9 +327,9 @@ class Alignment:
         crpix1 = np.asarray(changing_keywords["CRPIX1"])[:nx, None]
         crpix3 = np.asarray(changing_keywords["CRPIX3"])[:nx, None]
 
-        x = (crval3 + crval3_shift) + cdelt3 * ((pc3_3 + pc3_3_shift) * (i - (crpix3)) + (pc3_1 + pc3_1_shift) * (j - (crpix1)))
+        x = crval3 + cdelt3 * (pc3_3 * (i - crpix3) + pc3_1 * (j - crpix1))
 
-        y = (crval1 + crval1_shift) + cdelt1 * ((pc1_3 + pc1_3_shift) * (i - (crpix3)) + (pc1_1 + pc1_1_shift) * (j - (crpix1)))
+        y = crval1 + cdelt1 * (pc1_3 * (i - crpix3) + pc1_1 * (j - crpix1))
 
         coords[:, :, 0] = x
         coords[:, :, 1] = y
@@ -329,7 +339,7 @@ class Alignment:
     def identify_relevant_hmi_data(self, coords, hmix, hmiy, hmi_data, delta = 20):
         """
         This function identifies the relevant HMI data that overlaps with the DKIST data, with a buffer of delta arcseconds on each side. 
-        It returns the x and y coordinates of the relevant HMI data, as well as the intensity data.
+        It returns the x and y coordinates of the relevant HMI data, as well as the normalized intensity data.
         
         Parameters:
         -----------
@@ -355,6 +365,7 @@ class Alignment:
 
         # crop the HMI data to the relevant coordinates. Note that the HMI data is transposed because the x and y coordinates are in the opposite order of the data array.
         relevant_hmi_data= hmi_data.T[relevant_hmix_indices[0]:relevant_hmix_indices[1], relevant_hmiy_indices[0]:relevant_hmiy_indices[1]].T
+        relevant_hmi_data = self.data_loader.normalize(relevant_hmi_data)
 
         return relevant_hmix, relevant_hmiy, relevant_hmi_data
     
@@ -527,8 +538,11 @@ if __name__ == "__main__":
     # path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
 
-    # path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
-    # path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
+    #path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
+    #path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
+    
+    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
+    path_to_sunpy = "~/sunpy/data/"
 
     cfg = Config(
     path_to_dkist_data=path_to_dkist_data, 
@@ -544,19 +558,37 @@ if __name__ == "__main__":
 
     # Minimize
     print("ALIGNING")
-    initial_guess = [-15, 15, 0, 0, 0, 0]
-    bounds = [(-20, -5), (0, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
+    
     alignment = Alignment(cfg, loader)
-    original_dkist_coords = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, [-15, 15, 0, 0, 0, 0])
+    original_dkist_coords = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, [0, 0, 0, 0, 0, 0])
+
 
     if run:
+        if cfg.use_gui:
+            # Testing GUI:
+            initial_guess = alignment.initial_guess_gui([0, 0, 0, 0, 0, 0], 
+                                        loader.fixed_keywords, 
+                                        loader.changing_keywords,
+                                        original_dkist_coords,
+                                        loader.hmix.value,
+                                        loader.hmiy.value,
+                                        loader.hmi_data)
+            print("Initial guess from GUI:", initial_guess)
+
+        else:
+            initial_guess = [-10, 15, 0, 0, 0, 0]
+        
+        
+        print("Moving on to final alignment.")
+
+        bounds = [(-20, 0), (0, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
         best_parameters, success, final_coordinates = alignment.main(initial_guess, bounds)
 
         # print('Optimization converged:', success)
         # print('Best parameters found:', best_parameters)
 
     else:
-        best_parameters = [-5.00000517e+00,  6.92241086e+00, -7.59570122e-03, -4.62867902e-03, -1.41114322e-01,  2.45184961e-02]
+        best_parameters = [-1.60380959e+00,  1.01922364e+01, -9.42824916e-04, -1.06372480e-02, 2.33890820e-02,  1.35416594e-02]
 
 
     # assemble final coordinates
@@ -578,7 +610,7 @@ if __name__ == "__main__":
     plt.subplot(2,2,1)
     plt.title('Original DKIST data overlayed over original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap = 'plasma')
+    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 0.8)
     plt.colorbar()
 
     plt.subplot(2,2,2)
