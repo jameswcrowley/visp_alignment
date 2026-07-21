@@ -105,7 +105,7 @@ class DataLoader:
 
         self.hmi_times = hmi_times
 
-    def get_dkist_wavelengths(self): #read in data step 1
+    def get_dkist_wavelengths(self):
         """
         Returns a 2D spatial intensity map where each pixel contains the average
         intensity of the brightest/most intense wavelength samples (above 95th percentile) from the DKIST dataset.
@@ -175,7 +175,7 @@ class DataLoader:
         print(mean_data.shape)
         return mean_data
 
-    def get_dkist_headers(self): #read in data step 1
+    def get_dkist_headers(self):
         """
         Returns the 2 arrays of the fixed and changing keywords from the DKIST headers
 
@@ -317,7 +317,6 @@ class Alignment:
         else:
             i = 1
 
-        #i = np.arange(nx)[:, None] + 1
         j = np.arange(ny)[None, :] + 1
 
         #TODO: Figure out what to do about raster repeats
@@ -468,9 +467,7 @@ class Alignment:
         best_parameters = [-1.60380959e+00,  1.01922364e+01, -9.42824916e-04, -1.06372480e-02, 2.33890820e-02,  1.35416594e-02]
         result = True
         bounds = [(best_parameters[0] - 1, best_parameters[0] + 1), (best_parameters[1] - 1, best_parameters[1] + 1), (best_parameters[2], best_parameters[2]), (best_parameters[3], best_parameters[3]), (best_parameters[4], best_parameters[4]), (best_parameters[5], best_parameters[5])]
-        
-        #best_parameters = initial_guess
- 
+         
         print("done with roughz alignment getting all hmi times")
         self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
         print("aligning by slit")
@@ -560,28 +557,13 @@ if __name__ == "__main__":
 
 
     if run:
-        if cfg.use_gui:
-            # Testing GUI:
-            initial_guess = alignment.initial_guess_gui([0, 0, 0, 0, 0, 0], 
-                                        loader.fixed_keywords, 
-                                        loader.changing_keywords,
-                                        original_dkist_coords,
-                                        loader.hmix.value,
-                                        loader.hmiy.value,
-                                        loader.hmi_data)
-            print("Initial guess from GUI:", initial_guess)
-
-        else:
-            initial_guess = [-10, 15, 0, 0, 0, 0]
+        initial_guess = [-10, 15, 0, 0, 0, 0]
         
-        
-        print("Moving on to final alignment.")
-
         bounds = [(-20, 0), (0, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
         best_parameters, success, final_coordinates = alignment.main(initial_guess, bounds)
 
-        # print('Optimization converged:', success)
-        # print('Best parameters found:', best_parameters)
+        print('Optimization converged:', success)
+        print('Best parameters found:', best_parameters)
 
     else:
         best_parameters = [-1.60380959e+00,  1.01922364e+01, -9.42824916e-04, -1.06372480e-02, 2.33890820e-02,  1.35416594e-02]
