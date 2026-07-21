@@ -208,8 +208,10 @@ class DataLoader:
             "CRPIX3": [],
             "DATE-AVG": []
         }
-        for slit_i in fits_files:
-            header = fits.open(os.path.join(self.cfg.path_to_dkist_data, slit_i))[1].header
+        # TODO handle raster repeats
+        nx = fixed_keywords["DNAXIS3"]
+        for i in range(nx):
+            header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[i]))[1].header
             changing_keywords["CRVAL1"].append(header["CRVAL1"])
             changing_keywords["CRVAL3"].append(header["CRVAL3"])
             changing_keywords["CRPIX1"].append(header["CRPIX1"])
@@ -459,20 +461,23 @@ class Alignment:
         --------
         best_parameters (tuple): a tuple of the best parameters found by the optimization.
         """   
+        self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
 
-        # middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
+        middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
 
-        # hmix, hmiy, hmi_data = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_coordinates_and_data, self.data_loader.hmi_times)
+        middle_hmi_idx = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_files, self.data_loader.hmi_times)
 
-        #best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, self.data_loader.middle_hmix, self.data_loader.middle_hmiy, self.data_loader.middle_hmi_data)
-        best_parameters = [-1.60380959e+00,  1.01922364e+01, -9.42824916e-04, -1.06372480e-02, 2.33890820e-02,  1.35416594e-02]
-        result = True
+        hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, middle_hmi_idx)
+
+        best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
+
+        # best_parameters = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
+        # result = True
+
         bounds = [(best_parameters[0] - 1, best_parameters[0] + 1), (best_parameters[1] - 1, best_parameters[1] + 1), (best_parameters[2], best_parameters[2]), (best_parameters[3], best_parameters[3]), (best_parameters[4], best_parameters[4]), (best_parameters[5], best_parameters[5])]
          
-        print("done with roughz alignment getting all hmi times")
-        self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
-        print("aligning by slit")
-        final_coordinates = self.align_by_blocks(best_parameters, bounds)
+        print("aligning by slits")
+        final_coordinates = self.align_slit_by_slit(best_parameters, bounds)
         print("final coordinates determined")
         
         return best_parameters, result, final_coordinates
@@ -587,6 +592,7 @@ if __name__ == "__main__":
  
     print("Run =", run)
     
+    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
     path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
     # path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
@@ -614,16 +620,16 @@ if __name__ == "__main__":
 
 
     if run:
-        initial_guess = [-10, 15, 0, 0, 0, 0]
+        initial_guess = [0, 0, 0, 0, 0, 0]
         
-        bounds = [(-20, 0), (0, 30), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
+        bounds = [(-20, 20), (-20, 20), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
         best_parameters, success, final_coordinates = alignment.main(initial_guess, bounds)
 
         print('Optimization converged:', success)
         print('Best parameters found:', best_parameters)
 
     else:
-        best_parameters = [-1.60380959e+00,  1.01922364e+01, -9.42824916e-04, -1.06372480e-02, 2.33890820e-02,  1.35416594e-02]
+        best_parameters = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
 
 
     # assemble final coordinates
@@ -636,31 +642,46 @@ if __name__ == "__main__":
     relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
     interpolator = alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
 
-    print(final_coordinates.shape)
-    print(final_coordinates)
+    print("Best parameters from rough alignment:", best_parameters)
 
     final_HMI_interpolated_onto_coords = alignment.interpolate_hmi_to_coords(interpolator, final_coordinates)
 
-    plt.figure(figsize = [10, 10])
-    plt.subplot(2,2,1)
+    hmi_interpolated_to_rough_alignment = alignment.interpolate_hmi_to_coords(interpolator, coords_new)
+
+    hmi_interpolated_to_original_dkist_coords = alignment.interpolate_hmi_to_coords(interpolator, original_dkist_coords)
+
+    plt.figure(figsize = [10, 20])
+    plt.subplot(3,2,1)
     plt.title('Original DKIST data overlayed over original HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 0.8)
+    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 1)
     plt.colorbar()
 
-    plt.subplot(2,2,2)
+    plt.subplot(3,2,2)
+    plt.title('Difference between original DKIST and HMI data')
+    plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
+    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities - hmi_interpolated_to_original_dkist_coords, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
+    plt.colorbar()
+
+    plt.subplot(3,2,3)
     plt.title('DKIST data after rought alignment')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 1)
     plt.colorbar()
 
-    plt.subplot(2,2,3)
+    plt.subplot(3,2,4)
+    plt.title('Difference between DKIST after rough alignment and HMI data')
+    plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
+    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], loader.intensities - hmi_interpolated_to_rough_alignment, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
+    plt.colorbar()
+
+    plt.subplot(3,2,5)
     plt.title('DKIST data after slit-by-slit')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 1)
     plt.colorbar()
 
-    plt.subplot(2,2,4)
+    plt.subplot(3,2,6)
     plt.title('Difference between DKIST after slit-by-slit and HMI data')
     plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
     plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities - final_HMI_interpolated_onto_coords, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
