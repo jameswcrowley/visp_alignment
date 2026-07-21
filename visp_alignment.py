@@ -275,7 +275,7 @@ class Alignment:
 
         return hmix, hmiy, hmi_data
     
-    def construct_dkist_coords(self, fixed_keywords, changing_keywords, parameters = (0, 0, 0, 0, 0, 0), i = None):
+    def construct_dkist_coords(self, fixed_keywords, changing_keywords, parameters = (0, 0, 0, 0, 0, 0), n = None):
         """
         This function constructs the default coordinates of the DKIST data from the fits files. 
         It returns a 3D array of the coordinates, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
@@ -311,11 +311,12 @@ class Alignment:
 
         coords = np.zeros((nx, ny, 2))
 
-        if i is None:
+        if n is None:
             i = np.ones(nx)[:, None]
-            
-        else:
+        elif n == 1:
             i = 1
+        else:
+            i = np.ones(n)[:, None]
 
         j = np.arange(ny)[None, :] + 1
 
@@ -426,7 +427,7 @@ class Alignment:
         loss (float): the loss value between the interpolated HMI data and the DKIST data.
         """
         # shift the DKIST coordinates based on the input parameters, identify the relevant HMI data that overlaps with the DKIST data, and interpolate the HMI data onto the DKIST coordinates.
-        coords_new = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, parameters, i=i)
+        coords_new = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, parameters, n=i)
 
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(interpolator, coords_new)
 
@@ -471,22 +472,22 @@ class Alignment:
         print("done with roughz alignment getting all hmi times")
         self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
         print("aligning by slit")
-        final_coordinates = self.align_slit_by_slit(best_parameters, bounds)
+        final_coordinates = self.align_by_blocks(best_parameters, bounds)
         print("final coordinates determined")
         
         return best_parameters, result, final_coordinates
     
-    def align(self, initial_guess, bounds, changing_keywords, intensities, hmix, hmiy, hmi_data, delta = 20, i = None):
-        initial_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, initial_guess, i = i)
+    def align(self, initial_guess, bounds, changing_keywords, intensities, hmix, hmiy, hmi_data, delta = 20, n = None):
+        initial_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, initial_guess, n = n)
         relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(initial_coordinates, hmix, hmiy, hmi_data, delta)
         interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
         
         result = opt.minimize(self.loss_function, 
             initial_guess, 
-            args=(changing_keywords, intensities, interpolator, i), 
+            args=(changing_keywords, intensities, interpolator, n), 
             bounds=bounds, 
             method='Powell', 
-            options={'maxiter': 200, 'disp': True}
+            options={'maxiter': 200, 'disp': self.cfg.verbose}
         )
 
         best_parameters = result.x
@@ -500,7 +501,7 @@ class Alignment:
 
         final_coordinates = np.zeros((nx, ny, 2))
 
-        current_hmi_image_index = -1
+        current_hmi_image_index = None
 
         hmix, hmiy, hmi_data = None, None, None
 
@@ -516,13 +517,69 @@ class Alignment:
                 current_hmi_image_index = best_hmi_index
                 hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, current_hmi_image_index)
 
-            best_parameters, result = self.align(last_best, bounds, slit_keywords, slit_intensities, hmix, hmiy, hmi_data, delta = 20, i = i)
+            best_parameters, result = self.align(last_best, bounds, slit_keywords, slit_intensities, hmix, hmiy, hmi_data, delta = 20, n = 1)
             last_best = best_parameters 
             
-            coords = self.construct_dkist_coords (self.data_loader.fixed_keywords, slit_keywords, best_parameters, i = i)
+            coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters, n = 1)
             final_coordinates[i] = coords[0] 
 
         return final_coordinates 
+    
+    def _process_block(self, start, end, hmi_index, last_best, bounds):
+        hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, hmi_index)
+
+        block_keywords = {
+            key: values[start:end] for key, values in self.data_loader.changing_keywords.items()
+        }
+        block_intensities = self.data_loader.intensities[start:end, :]
+
+        best_parameters, result = self.align(
+            last_best, bounds, block_keywords, block_intensities,
+            hmix, hmiy, hmi_data, delta=20, n=end - start
+        )
+
+        coords = self.construct_dkist_coords(
+            self.data_loader.fixed_keywords, block_keywords, best_parameters, n=end - start
+        )
+ 
+        return best_parameters, coords
+
+
+    def align_by_blocks(self, initial_guess, bounds):
+        nx = self.data_loader.fixed_keywords['DNAXIS3']
+        ny = self.data_loader.fixed_keywords['DNAXIS1']
+
+        final_coordinates = np.zeros((nx, ny, 2))
+
+        current_hmi_image_index = None
+        last_best = initial_guess
+        start = 0
+        best_hmi_index = None
+
+        for i in range(nx):
+            slit_time = Time(self.data_loader.changing_keywords["DATE-AVG"][i])
+            best_hmi_index = self.find_nearest_hmi(
+                slit_time, self.data_loader.hmi_files, self.data_loader.hmi_times
+            )
+
+            if best_hmi_index != current_hmi_image_index and i != start:
+                current_hmi_image_index = best_hmi_index
+
+                best_parameters, coords = self._process_block(
+                    start, i, current_hmi_image_index, last_best, bounds
+                )
+                last_best = best_parameters
+                final_coordinates[start:i] = coords
+                last_best = best_parameters
+
+                start = i
+
+        best_parameters, coords = self._process_block(
+            start, nx, best_hmi_index, last_best, bounds
+        )
+        final_coordinates[start:nx] = coords
+
+        return final_coordinates
 
 if __name__ == "__main__":
 
