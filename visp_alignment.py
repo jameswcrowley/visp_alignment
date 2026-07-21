@@ -53,7 +53,7 @@ class DataLoader:
         ---------
         tuple: A tuple containing the start and end times of the DKIST data in the folder
         """
-        return (changing_keywords["DATE-AVG"][0], changing_keywords["DATE-AVG"][1500])
+        return (changing_keywords["DATE-AVG"][0], changing_keywords["DATE-AVG"][-1])
 
     def normalize(self, arr):
         normalized = arr
@@ -301,7 +301,12 @@ class Alignment:
         pc3_1 = fixed_keywords['PC3_1'] + pc3_1_shift
         pc3_3 = fixed_keywords['PC3_3'] + pc3_3_shift
 
-        nx = fixed_keywords['DNAXIS3']
+        nx = None
+        if len(changing_keywords["CRVAL1"]) > fixed_keywords['DNAXIS3']:
+            nx = fixed_keywords['DNAXIS3']
+        else:
+            nx = len(changing_keywords["CRVAL1"])
+
         ny = fixed_keywords['DNAXIS1']
 
         coords = np.zeros((nx, ny, 2))
