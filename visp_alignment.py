@@ -463,16 +463,16 @@ class Alignment:
         """   
         self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
 
-        middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
+        # middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
 
-        middle_hmi_idx = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_files, self.data_loader.hmi_times)
+        # middle_hmi_idx = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_files, self.data_loader.hmi_times)
 
-        hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, middle_hmi_idx)
+        # hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, middle_hmi_idx)
 
-        best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
+        # best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
 
-        # best_parameters = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
-        # result = True
+        best_parameters = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
+        result = True
 
         bounds = [(best_parameters[0] - 1, best_parameters[0] + 1), (best_parameters[1] - 1, best_parameters[1] + 1), (best_parameters[2], best_parameters[2]), (best_parameters[3], best_parameters[3]), (best_parameters[4], best_parameters[4]), (best_parameters[5], best_parameters[5])]
          
@@ -599,6 +599,13 @@ if __name__ == "__main__":
 
     #path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
     #path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
+
+    output_folder = "saved_plots"
+    filename = "my_plot.png"
+
+    os.makedirs(output_folder, exist_ok=True)
+    
+    save_path = os.path.join(output_folder, filename)
     
     cfg = Config(
     path_to_dkist_data=path_to_dkist_data, 
@@ -626,7 +633,7 @@ if __name__ == "__main__":
         best_parameters, success, final_coordinates = alignment.main(initial_guess, bounds)
 
         print('Optimization converged:', success)
-        print('Best parameters found:', best_parameters)
+        print('Best parameters from rough alignment:', best_parameters)
 
     else:
         best_parameters = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
@@ -641,8 +648,6 @@ if __name__ == "__main__":
     hmix, hmiy, hmi_data = alignment.get_hmi(loader.hmi_files, best_idx)
     relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
     interpolator = alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
-
-    print("Best parameters from rough alignment:", best_parameters)
 
     final_HMI_interpolated_onto_coords = alignment.interpolate_hmi_to_coords(interpolator, final_coordinates)
 
@@ -687,7 +692,7 @@ if __name__ == "__main__":
     plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities - final_HMI_interpolated_onto_coords, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
     plt.colorbar()
 
-    plt.savefig('my_plot.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
     print("DONE")
 

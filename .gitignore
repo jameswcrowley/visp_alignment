@@ -14,4 +14,8 @@ wheels/
 pyproject.toml
 uv.lock
 
+# Ignore testing
 test.ipynb
+testing.py
+
+saved_plots/
