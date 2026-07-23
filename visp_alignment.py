@@ -604,8 +604,6 @@ class Alignment:
             bounds,
             return_fitted_parameters=return_slit_fitted_parameters,
             save_fitted_parameters_path=save_slit_fitted_parameters_path,
-            crval_delta=crval_delta,
-            pc_delta=pc_delta
         )
 
         if return_slit_fitted_parameters:
@@ -848,11 +846,21 @@ class Alignment:
         return best_parameters, coords
 
 
-    def align_by_blocks(self, initial_guess, bounds):
+    def align_by_blocks(
+            self,
+            initial_guess,
+            bounds,
+            return_fitted_parameters=False,
+            save_fitted_parameters_path=None,
+        ):
         nx = self.data_loader.fixed_keywords['DNAXIS3']
         ny = self.data_loader.fixed_keywords['DNAXIS1']
 
         final_coordinates = np.zeros((nx, ny, 2))
+
+        fitted_parameters = None
+        if return_fitted_parameters or save_fitted_parameters_path is not None:
+            fitted_parameters = np.zeros((nx, len(initial_guess)))
 
         current_hmi_image_index = None
         last_best = initial_guess
@@ -873,7 +881,9 @@ class Alignment:
                 )
                 last_best = best_parameters
                 final_coordinates[start:i] = coords
-                last_best = best_parameters
+
+                if fitted_parameters is not None:
+                    fitted_parameters[start:i] = best_parameters
 
                 start = i
 
@@ -882,6 +892,16 @@ class Alignment:
         )
         final_coordinates[start:nx] = coords
 
+        if fitted_parameters is not None:
+            fitted_parameters[start:nx] = best_parameters
+
+        if save_fitted_parameters_path is not None and fitted_parameters is not None:
+            np.save(save_fitted_parameters_path, fitted_parameters)
+            self.cfg.log(f"Saved block fitted parameters to {save_fitted_parameters_path}")
+
+        if return_fitted_parameters:
+            return final_coordinates, fitted_parameters
+
         return final_coordinates
 
 if __name__ == "__main__":
@@ -889,8 +909,8 @@ if __name__ == "__main__":
     run = True
     use_synthetic_hmi_viz = True
  
-    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
-    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
+    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
     #path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_4_62/IHFDSO"
     # path_to_dkist_data = "/Users/jamescrowley/Documents/?summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
