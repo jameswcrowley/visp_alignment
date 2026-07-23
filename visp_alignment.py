@@ -58,8 +58,24 @@ class DataLoader:
         return (changing_keywords["DATE-AVG"][0], changing_keywords["DATE-AVG"][-1])
 
     def normalize(self, arr):
-        normalized = arr
-        normalized = (normalized- np.nanmedian(normalized)) / (np.nanmax(normalized) - np.nanmin(normalized))
+        arr = np.asarray(arr, dtype=float)
+
+        # Use robust percentile limits so isolated bad pixels do not dominate scaling.
+        finite_mask = np.isfinite(arr)
+        if not np.any(finite_mask):
+            return np.full_like(arr, np.nan, dtype=float)
+
+        p_low, p_high = np.nanpercentile(arr[finite_mask], [1.0, 99.0])
+        clipped = np.clip(arr, p_low, p_high)
+
+        center = np.nanmedian(clipped)
+        scale = p_high - p_low
+
+        # Avoid divide-by-zero for near-constant arrays.
+        if not np.isfinite(scale) or scale <= 0:
+            return clipped - center
+
+        normalized = (clipped - center) / scale
         return normalized
 
     def load_hmi(self, start_time: Time, end_time: Time):
@@ -249,7 +265,7 @@ class DataLoader:
         self.cfg.log(f"DKIST time span: {self.start_time} to {self.end_time}")
 
         self.cfg.log("Building DKIST intensity map")
-        self.intensities = self.get_dkist_wavelengths2()
+        self.intensities = self.get_dkist_wavelengths()
 
         self.cfg.log("Loading HMI reference data")
         self.middle_hmix, self.middle_hmiy, self.middle_hmi_data, self.hmi_files = self.load_hmi(Time(self.start_time), Time(self.end_time))
@@ -422,22 +438,21 @@ class Alignment:
 
         return HMI_interpolated_to_coords
 
-    def loss_function(self, parameters, changing_keywords, data_numpy, interpolator ):
-        """
-        This function calculates the loss between the interpolated HMI data and the DKIST data.
-        It returns the loss value - here, I chose to use the sum of squared differences to quantify the difference between the two datasets, but other metrics could be used as well.
 
-        Parameters:
-        -----------
-        parameters (tuple): a tuple of the parameters to modify the crval and pc values.
-        interpolator (scipy.interpolate.RegularGridInterpolator): a RegularGridInterpolator object that can be used to interpolate the relevant HMI data onto any set of coordinates.
-        data_numpy (numpy.ndarray): the DKIST data.
-
-        Returns:
-        --------
-        loss (float): the loss value between the interpolated HMI data and the DKIST data.
+    def loss_function(
+        self,
+        parameters,
+        changing_keywords,
+        data_numpy,
+        interpolator,
+        reference_parameters=None
+    ):
         """
-        # shift the DKIST coordinates based on the input parameters, identify the relevant HMI data that overlaps with the DKIST data, and interpolate the HMI data onto the DKIST coordinates.
+        Calculates alignment loss between interpolated HMI data and DKIST data.
+        Includes an optional regularization term that discourages large
+        deviations from a reference parameter vector.
+        """
+
         coords_new = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, parameters)
 
         HMI_interpolated_to_coords = self.interpolate_hmi_to_coords(interpolator, coords_new)
@@ -445,18 +460,49 @@ class Alignment:
         x = HMI_interpolated_to_coords
         y = data_numpy
 
-        mask = ~np.isnan(x) & ~np.isnan(y)
-        xv, yv = x[mask], y[mask]
+        mask = np.isfinite(x) & np.isfinite(y)
 
-        xv = xv - np.mean(xv) 
-        yv = yv - np.mean(yv)
-        corr = np.sum(xv*yv) / np.sqrt(np.sum(xv*xv) * np.sum(yv*yv))
+        xv = x[mask]
+        yv = y[mask]
+
+        if xv.size < 50:
+            return 1.0
+
+        x_low, x_high = np.nanpercentile(xv, [1.0, 99.0])
+        y_low, y_high = np.nanpercentile(yv, [1.0, 99.0])
+
+        xv = np.clip(xv, x_low, x_high)
+        yv = np.clip(yv, y_low, y_high)
+
+        xv = xv - np.nanmedian(xv)
+        yv = yv - np.nanmedian(yv)
+
+        denom = np.sqrt(np.sum(xv * xv) * np.sum(yv * yv))
+
+        if not np.isfinite(denom) or denom <= 0:
+            return 1.0
+
+        corr = np.sum(xv * yv) / denom
+        corr = float(np.clip(corr, -1.0, 1.0))
 
         loss = -corr
 
+        # Regularization term
+        if reference_parameters is not None:
+            regularization_weight = 0.1
+            parameter_penalty = np.sum((np.asarray(parameters) - np.asarray(reference_parameters)) ** 2)
+            loss += regularization_weight * parameter_penalty
+
         return loss
+
     
-    def main(self, initial_guess, bounds):
+    def main(
+        self,
+        initial_guess,
+        bounds,
+        return_slit_fitted_parameters=False,
+        save_slit_fitted_parameters_path=None,
+    ):
         """
         This function performs the optimization to find the best parameters to align the DKIST data with the HMI data.
         It returns the best parameters found by the optimization.
@@ -472,117 +518,242 @@ class Alignment:
         """   
         self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
 
-        # middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
-
-        # middle_hmi_idx = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_times)
-
-        # hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, middle_hmi_idx)
-
-        # best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
-
         best_parameters = initial_guess
         result = True
 
-        bounds = [(best_parameters[0] - 1, best_parameters[0] + 1), (best_parameters[1] - 1, best_parameters[1] + 1), (best_parameters[2], best_parameters[2]), (best_parameters[3], best_parameters[3]), (best_parameters[4], best_parameters[4]), (best_parameters[5], best_parameters[5])]
+        crval_delta = 1
+        pc_delta = 0
+
+        bounds = [(best_parameters[0], best_parameters[0]), (best_parameters[1] - crval_delta, best_parameters[1] + crval_delta), (best_parameters[2] - pc_delta, best_parameters[2] + pc_delta), (best_parameters[3] - pc_delta, best_parameters[3] + pc_delta), (best_parameters[4] - pc_delta, best_parameters[4] + pc_delta), (best_parameters[5] - pc_delta, best_parameters[5] + pc_delta)]
          
         self.cfg.log("Aligning by slits")
-        final_coordinates = self.align_slit_by_slit(best_parameters, bounds)
+        slit_by_slit_result = self.align_slit_by_slit(
+            best_parameters,
+            bounds,
+            return_fitted_parameters=return_slit_fitted_parameters,
+            save_fitted_parameters_path=save_slit_fitted_parameters_path,
+            crval_delta=crval_delta,
+            pc_delta=pc_delta
+        )
+
+        if return_slit_fitted_parameters:
+            final_coordinates, slit_fitted_parameters = slit_by_slit_result
+            self.cfg.log("Final coordinates and slit-by-slit parameters determined")
+            return best_parameters, result, final_coordinates, slit_fitted_parameters
+
+        final_coordinates = slit_by_slit_result
         self.cfg.log("Final coordinates determined")
-        
         return best_parameters, result, final_coordinates
     
-    def align(self, initial_guess, bounds, changing_keywords, intensities, hmix, hmiy, hmi_data, delta = 20, interpolator=None):
+    def align(
+        self,
+        initial_guess,
+        bounds,
+        changing_keywords,
+        intensities,
+        hmix,
+        hmiy,
+        hmi_data,
+        delta=20,
+        interpolator=None,
+        reference_parameters=None
+    ):
+
         self.cfg.log(f"Running optimization with initial guess: {np.array(initial_guess)}")
+
         if interpolator is None:
             initial_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, initial_guess)
-            relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(initial_coordinates, hmix, hmiy, hmi_data, delta)
+
+            relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(
+                initial_coordinates,
+                hmix,
+                hmiy,
+                hmi_data,
+                delta,
+            )
+
             interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
-        
-        result = opt.minimize(self.loss_function, 
-            initial_guess, 
-            args=(changing_keywords, intensities, interpolator), 
-            bounds=bounds, 
-            method='Powell', 
-            options={'maxiter': 200, 'disp': self.cfg.verbose}
+
+        result = opt.minimize(
+            self.loss_function,
+            initial_guess,
+            args=(changing_keywords, intensities, interpolator, reference_parameters),
+            bounds=bounds,
+            method='Powell',
+            options={'maxiter': 200, 'disp': self.cfg.verbose},
         )
 
         best_parameters = result.x
+
         self.cfg.log(f"Optimization success={result.success}, best parameters={best_parameters}")
-        
+
         return best_parameters, result.success
 
-    def align_slit_by_slit(self, initial_guess, bounds):
+    def align_slit_by_slit(
+        self,
+        initial_guess,
+        bounds,
+        return_fitted_parameters=False,
+        save_fitted_parameters_path=None,
+        crval_delta=0.2,
+        pc_delta=0,
+    ):
 
         nx = self.data_loader.fixed_keywords['DNAXIS3']
         ny = self.data_loader.fixed_keywords['DNAXIS1']
 
         final_coordinates = np.zeros((nx, ny, 2))
 
+        fitted_parameters = None
+        if return_fitted_parameters or save_fitted_parameters_path is not None:
+            fitted_parameters = np.zeros((nx, len(initial_guess)))
+
         current_hmi_image_index = None
 
-        hmix, hmiy, hmi_data = None, None, None
+        hmix = None
+        hmiy = None
+        hmi_data = None
         current_interpolator = None
 
         slit_times = [Time(t) for t in self.data_loader.changing_keywords["DATE-AVG"]]
+
+        # Use nearest HMI frame for each slit
         hmi_indices = [self.find_nearest_hmi(t, self.data_loader.hmi_times) for t in slit_times]
 
-        last_best = initial_guess
+        self.cfg.log(f"Using {len(np.unique(hmi_indices))} unique HMI frames for {nx} slits")
+
+        global_best = np.array(initial_guess, dtype=float)
+        last_best   = global_best.copy()
+
 
         for i in range(nx):
             slit_keywords = {key: [values[i]] for key, values in self.data_loader.changing_keywords.items()}
-            slit_intensities = self.data_loader.intensities[i:i+1, :]
+            slit_intensities = self.data_loader.intensities[i:i + 1, :]
 
-            if i == 0 or i == nx - 1 or i % max(1, nx // 10) == 0:
+            if (i == 0 or i == nx - 1 or i % max(1, nx // 10) == 0):
                 self.cfg.log(f"Processing slit {i + 1}/{nx}")
 
             best_hmi_index = hmi_indices[i]
+
+            # Rebuild interpolator whenever HMI frame changes
             if best_hmi_index != current_hmi_image_index:
                 current_hmi_image_index = best_hmi_index
+
                 self.cfg.log(f"Switching to HMI image index {current_hmi_image_index}")
+
                 hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, current_hmi_image_index)
 
                 block_end = i + 1
+
                 while block_end < nx and hmi_indices[block_end] == current_hmi_image_index:
                     block_end += 1
 
-                block_keywords = {
-                    key: values[i:block_end] for key, values in self.data_loader.changing_keywords.items()
-                }
-                reference_coordinates = self.construct_dkist_coords(
-                    self.data_loader.fixed_keywords,
-                    block_keywords,
-                    last_best
-                )
+                block_keywords = {key: values[i:block_end] for key, values in self.data_loader.changing_keywords.items()}
+
+                reference_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, block_keywords, last_best)
+
                 relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(
                     reference_coordinates,
                     hmix,
                     hmiy,
                     hmi_data,
-                    delta=20
-                )
-                current_interpolator = self.construct_interpolator(
-                    relevant_hmix,
-                    relevant_hmiy,
-                    relevant_hmi_data
+                    delta=20,
                 )
 
+                current_interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+
+            # Bounds centered on previous slit
+            current_bounds = [
+                (global_best[0] - crval_delta, global_best[0] + crval_delta),
+                (global_best[1] - crval_delta, global_best[1] + crval_delta),
+                (global_best[2] - pc_delta, global_best[2] + pc_delta),
+                (global_best[3] - pc_delta, global_best[3] + pc_delta),
+                (global_best[4] - pc_delta, global_best[4] + pc_delta),
+                (global_best[5] - pc_delta, global_best[5] + pc_delta),
+            ] 
+
+            # Fit slit using previous slit as regularization reference
             best_parameters, result = self.align(
                 last_best,
-                bounds,
+                current_bounds,
                 slit_keywords,
                 slit_intensities,
                 hmix,
                 hmiy,
                 hmi_data,
                 delta=20,
-                interpolator=current_interpolator
+                interpolator=current_interpolator,
+                reference_parameters=last_best,
             )
-            last_best = best_parameters 
-            
-            coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters)
-            final_coordinates[i] = coords[0] 
 
-        return final_coordinates 
+            # Store fitted parameters
+            if fitted_parameters is not None:
+                fitted_parameters[i] = best_parameters
+
+            # Generate final slit coordinates
+            coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters)
+
+            final_coordinates[i] = coords[0]
+
+            # Update reference for next slit
+            last_best = np.array(best_parameters, dtype=float)
+
+        if save_fitted_parameters_path is not None and fitted_parameters is not None:
+            np.save(save_fitted_parameters_path, fitted_parameters)
+            self.cfg.log(f"Saved slit-by-slit fitted parameters to {save_fitted_parameters_path}")
+
+        if return_fitted_parameters:
+            return final_coordinates, fitted_parameters
+
+        return final_coordinates
+
+    def build_synthetic_hmi_on_coords(self, coords, hmi_indices=None, delta=20):
+        """
+        Builds a synthetic HMI image sampled on a DKIST coordinate grid.
+        Each slit uses the nearest-in-time HMI frame, matching the slit-by-slit
+        alignment strategy.
+
+        Parameters:
+        -----------
+        coords (numpy.ndarray): DKIST coordinates with shape (nx, ny, 2).
+        hmi_indices (list[int] | None): Optional nearest HMI index for each slit.
+        delta (float): Padding (arcsec) when cropping HMI data for interpolation.
+
+        Returns:
+        --------
+        synthetic_hmi (numpy.ndarray): HMI intensity sampled on coords, shape (nx, ny).
+        hmi_indices (list[int]): HMI index used for each slit.
+        """
+        nx = coords.shape[0]
+        synthetic_hmi = np.full((coords.shape[0], coords.shape[1]), np.nan, dtype=float)
+
+        if hmi_indices is None:
+            slit_times = [Time(t) for t in self.data_loader.changing_keywords["DATE-AVG"]][:nx]
+            hmi_indices = [self.find_nearest_hmi(t, self.data_loader.hmi_times) for t in slit_times]
+
+        start = 0
+        while start < nx:
+            hmi_index = hmi_indices[start]
+            end = start + 1
+            while end < nx and hmi_indices[end] == hmi_index:
+                end += 1
+
+            hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, hmi_index)
+            block_coords = coords[start:end]
+
+            relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(
+                block_coords,
+                hmix,
+                hmiy,
+                hmi_data,
+                delta=delta,
+            )
+
+            interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+            synthetic_hmi[start:end, :] = self.interpolate_hmi_to_coords(interpolator, block_coords)
+            start = end
+
+        return synthetic_hmi, hmi_indices
     
     def _process_block(self, start, end, hmi_index, last_best, bounds):
         hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, hmi_index)
@@ -643,6 +814,7 @@ class Alignment:
 if __name__ == "__main__":
 
     run = True
+    use_synthetic_hmi_viz = True
  
     # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
     #path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
@@ -679,11 +851,19 @@ if __name__ == "__main__":
     original_dkist_coords = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, [0, 0, 0, 0, 0, 0])
 
 
+    slit_fitted_parameters = None
+
     if run:
         initial_guess = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
         
         bounds = [(-20, 20), (-20, 20), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
-        best_parameters, success, final_coordinates = alignment.main(initial_guess, bounds)
+        save_slit_fit_parameters_path = os.path.join(output_folder, "slit_fit_parameters.npy")
+        best_parameters, success, final_coordinates, slit_fitted_parameters = alignment.main(
+            initial_guess,
+            bounds,
+            return_slit_fitted_parameters=True,
+            save_slit_fitted_parameters_path=save_slit_fit_parameters_path,
+        )
 
         cfg.log('Optimization converged:', success)
         cfg.log('Best parameters from rough alignment:', best_parameters)
@@ -696,54 +876,107 @@ if __name__ == "__main__":
 
     coords_new = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, best_parameters)
 
-    middle_image_time = loader.hmi_times[len(loader.hmi_times)//2]
-    best_idx = alignment.find_nearest_hmi(middle_image_time, loader.hmi_times)
-    hmix, hmiy, hmi_data = alignment.get_hmi(loader.hmi_files, best_idx)
-    relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
-    interpolator = alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+    if not run:
+        final_coordinates = coords_new
 
-    final_HMI_interpolated_onto_coords = alignment.interpolate_hmi_to_coords(interpolator, final_coordinates)
+    if use_synthetic_hmi_viz:
+        synthetic_hmi_on_original_coords, synthetic_hmi_indices_original = alignment.build_synthetic_hmi_on_coords(
+            original_dkist_coords,
+            delta=20,
+        )
 
-    hmi_interpolated_to_rough_alignment = alignment.interpolate_hmi_to_coords(interpolator, coords_new)
+        cfg.log(
+            f"Built synthetic HMI on original coordinates using {len(np.unique(synthetic_hmi_indices_original))} HMI frames"
+        )
 
-    hmi_interpolated_to_original_dkist_coords = alignment.interpolate_hmi_to_coords(interpolator, original_dkist_coords)
+        synthetic_hmi_on_final_coords, synthetic_hmi_indices = alignment.build_synthetic_hmi_on_coords(
+            final_coordinates,
+            delta=20,
+        )
 
-    plt.figure(figsize = [10, 20])
+        cfg.log(
+            f"Built synthetic HMI on final coordinates using {len(np.unique(synthetic_hmi_indices))} HMI frames"
+        )
+    else:
+        middle_image_time = loader.hmi_times[len(loader.hmi_times)//2]
+        best_idx = alignment.find_nearest_hmi(middle_image_time, loader.hmi_times)
+        hmix, hmiy, hmi_data = alignment.get_hmi(loader.hmi_files, best_idx)
+        relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(
+            coords_new, hmix, hmiy, hmi_data
+        )
+        interpolator = alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+
+        synthetic_hmi_on_original_coords = alignment.interpolate_hmi_to_coords(
+            interpolator, original_dkist_coords
+        )
+        synthetic_hmi_on_final_coords = alignment.interpolate_hmi_to_coords(
+            interpolator, final_coordinates
+        )
+
+        cfg.log("Using legacy single-frame HMI visualization mode")
+
+    plt.figure(figsize = [12, 10])
     plt.subplot(3,2,1)
-    plt.title('Original DKIST data overlayed over original HMI data')
-    plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 1)
+    if use_synthetic_hmi_viz:
+        plt.title('Original DKIST data over synthetic nearest-frame HMI')
+    else:
+        plt.title('Original DKIST data overlayed over original HMI data')
+    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], synthetic_hmi_on_original_coords, cmap='grey', shading='auto')
+    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap='plasma', alpha=0.8, shading='auto')
     plt.colorbar()
 
     plt.subplot(3,2,2)
-    plt.title('Difference between original DKIST and HMI data')
-    plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities - hmi_interpolated_to_original_dkist_coords, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
+    if use_synthetic_hmi_viz:
+        plt.title('Difference between original DKIST and synthetic nearest-frame HMI')
+    else:
+        plt.title('Difference between original DKIST and HMI data')
+    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], synthetic_hmi_on_original_coords, cmap='grey', shading='auto')
+    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities - synthetic_hmi_on_original_coords, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
     plt.colorbar()
 
     plt.subplot(3,2,3)
-    plt.title('DKIST data after rought alignment')
-    plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 1)
+    if use_synthetic_hmi_viz:
+        plt.title('DKIST data after slit-by-slit over synthetic nearest-frame HMI')
+    else:
+        plt.title('DKIST data after slit-by-slit')
+    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], synthetic_hmi_on_final_coords, cmap='grey', shading='auto')
+    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities, cmap='plasma', alpha=0.8, shading='auto')
     plt.colorbar()
 
     plt.subplot(3,2,4)
-    plt.title('Difference between DKIST after rough alignment and HMI data')
-    plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(coords_new[:, :, 0], coords_new[:, :, 1], loader.intensities - hmi_interpolated_to_rough_alignment, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
+    if use_synthetic_hmi_viz:
+        plt.title('Difference between DKIST after slit-by-slit and synthetic nearest-frame HMI')
+    else:
+        plt.title('Difference between DKIST after slit-by-slit and HMI data')
+    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], synthetic_hmi_on_final_coords, cmap='grey', shading='auto')
+    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities - synthetic_hmi_on_final_coords, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
     plt.colorbar()
 
-    plt.subplot(3,2,5)
-    plt.title('DKIST data after slit-by-slit')
-    plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities, cmap = 'plasma', alpha = 1)
-    plt.colorbar()
+    ax_params = plt.subplot(3,1,3)
+    if slit_fitted_parameters is not None:
+        slit_indices = np.arange(slit_fitted_parameters.shape[0])
+        parameter_names = [
+            'CRVAL1 shift',
+            'CRVAL3 shift',
+            'PC1_1 shift',
+            'PC3_1 shift',
+            'PC1_3 shift',
+            'PC3_3 shift',
+        ]
+        for p_idx, p_name in enumerate(parameter_names):
+            ax_params.plot(slit_indices, slit_fitted_parameters[:, p_idx], label=p_name)
 
-    plt.subplot(3,2,6)
-    plt.title('Difference between DKIST after slit-by-slit and HMI data')
-    plt.imshow(relevant_hmi_data, extent = [relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap = 'grey', origin = 'lower')
-    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities - final_HMI_interpolated_onto_coords, cmap = 'bwr', alpha = 1, vmin = -0.5, vmax = 0.5)
-    plt.colorbar()
+        ax_params.set_title('Evolution of fitted slit-by-slit parameters across raster')
+        ax_params.set_xlabel('Slit index')
+        ax_params.set_ylabel('Parameter value')
+        ax_params.grid(True, alpha=0.3)
+        ax_params.legend(loc='best', fontsize=8, ncol=2)
+    else:
+        ax_params.set_title('Evolution of fitted slit-by-slit parameters across raster')
+        ax_params.text(0.5, 0.5, 'No slit-by-slit fitted parameters available', ha='center', va='center')
+        ax_params.set_axis_off()
+
+    plt.tight_layout()
 
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
