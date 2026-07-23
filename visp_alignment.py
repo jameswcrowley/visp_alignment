@@ -23,14 +23,16 @@ class Config:
         path_to_dkist_data: str,
         path_to_sunpy: str,
         wavelength_index = None,
-        use_gui = False,
         verbose = False
     ):
         self.path_to_dkist_data = path_to_dkist_data
         self.path_to_sunpy = path_to_sunpy
         self.wavelength_index = wavelength_index
-        self.use_gui = use_gui
         self.verbose = verbose
+
+    def log(self, *args, **kwargs):
+        if self.verbose:
+            print(*args, **kwargs)
         
 
 
@@ -70,6 +72,8 @@ class DataLoader:
         end_time (Time): The end time of the interval
 
         """
+        self.cfg.log(f"Searching HMI data from {start_time.isot} to {end_time.isot}")
+
         search_results = Fido.search(
             a.Instrument.hmi,
             a.Physobs("intensity"),
@@ -79,6 +83,7 @@ class DataLoader:
         hmi_files = Fido.fetch(
             search_results, path=self.cfg.path_to_sunpy, progress=self.cfg.verbose, site="NSO"
         )
+        self.cfg.log(f"Fetched {len(hmi_files)} HMI files")
 
         hmi = map.Map(hmi_files[len(hmi_files)//2])
 
@@ -104,6 +109,7 @@ class DataLoader:
             hmi_times.append(image_time)
 
         self.hmi_times = hmi_times
+        self.cfg.log(f"Loaded timestamps for {len(hmi_times)} HMI files")
 
     def get_dkist_wavelengths(self):
         """
@@ -138,15 +144,15 @@ class DataLoader:
         else:
             all_data = np.array(ds[:, :, :].data)
         
-        print("Shape of all the data", all_data.shape)
-        print("Checks if there are any non nan values", not np.isnan(all_data).all())
+        self.cfg.log("Shape of all the data", all_data.shape)
+        self.cfg.log("Checks if there are any non nan values", not np.isnan(all_data).all())
  
         relevant_data = all_data[:, wavelength_indicies, :] # gets the data of all wavelengths across all slits for the indicies above the threshold
-        print(50 * '-')
-        print("Shape of the relevant data", relevant_data.shape)
+        self.cfg.log(50 * '-')
+        self.cfg.log("Shape of the relevant data", relevant_data.shape)
         # print("relevant Data: ", relevant_data)
-        print(50 * '-')
-        print("Checks if there are any non nan values", not np.isnan(relevant_data).all())
+        self.cfg.log(50 * '-')
+        self.cfg.log("Checks if there are any non nan values", not np.isnan(relevant_data).all())
 
         mean_data = np.nanmean(relevant_data, axis = 1) # mean of the data across the wavelength samples above the threshold
         mean_data = self.normalize(mean_data)
@@ -172,7 +178,7 @@ class DataLoader:
 
         mean_data = np.nanmean(data, axis = 1)
         mean_data = self.normalize(mean_data)
-        print(mean_data.shape)
+        self.cfg.log("DKIST mean intensity map shape", mean_data.shape)
         return mean_data
 
     def get_dkist_headers(self):
@@ -189,6 +195,7 @@ class DataLoader:
         changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
         """
         fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x and '_I_' in x]
+        self.cfg.log(f"Found {len(fits_files)} DKIST FITS files")
         
         header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[0]))[1].header
         fixed_keywords = {
@@ -236,11 +243,17 @@ class DataLoader:
         hmi_data(numpy.ndarray): the intensity data of the HMI data
         """
 
+        self.cfg.log("Loading DKIST headers")
         self.fixed_keywords, self.changing_keywords, self.fits_files = self.get_dkist_headers()
         self.start_time, self.end_time = self.get_time(self.changing_keywords)
+        self.cfg.log(f"DKIST time span: {self.start_time} to {self.end_time}")
+
+        self.cfg.log("Building DKIST intensity map")
         self.intensities = self.get_dkist_wavelengths2()
 
+        self.cfg.log("Loading HMI reference data")
         self.middle_hmix, self.middle_hmiy, self.middle_hmi_data, self.hmi_files = self.load_hmi(Time(self.start_time), Time(self.end_time))
+        self.cfg.log("Data loading complete")
 
 class Alignment:
     """
@@ -273,7 +286,7 @@ class Alignment:
         
         hmi_data = hmi.data
 
-        hmi_data = loader.normalize(hmi_data)
+        hmi_data = self.data_loader.normalize(hmi_data)
 
         return hmix, hmiy, hmi_data
     
@@ -467,21 +480,23 @@ class Alignment:
 
         # best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
 
-        best_parameters = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
+        best_parameters = initial_guess
         result = True
 
         bounds = [(best_parameters[0] - 1, best_parameters[0] + 1), (best_parameters[1] - 1, best_parameters[1] + 1), (best_parameters[2], best_parameters[2]), (best_parameters[3], best_parameters[3]), (best_parameters[4], best_parameters[4]), (best_parameters[5], best_parameters[5])]
          
-        print("aligning by slits")
+        self.cfg.log("Aligning by slits")
         final_coordinates = self.align_slit_by_slit(best_parameters, bounds)
-        print("final coordinates determined")
+        self.cfg.log("Final coordinates determined")
         
         return best_parameters, result, final_coordinates
     
-    def align(self, initial_guess, bounds, changing_keywords, intensities, hmix, hmiy, hmi_data, delta = 20):
-        initial_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, initial_guess)
-        relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(initial_coordinates, hmix, hmiy, hmi_data, delta)
-        interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+    def align(self, initial_guess, bounds, changing_keywords, intensities, hmix, hmiy, hmi_data, delta = 20, interpolator=None):
+        self.cfg.log(f"Running optimization with initial guess: {np.array(initial_guess)}")
+        if interpolator is None:
+            initial_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, initial_guess)
+            relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(initial_coordinates, hmix, hmiy, hmi_data, delta)
+            interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
         
         result = opt.minimize(self.loss_function, 
             initial_guess, 
@@ -492,6 +507,7 @@ class Alignment:
         )
 
         best_parameters = result.x
+        self.cfg.log(f"Optimization success={result.success}, best parameters={best_parameters}")
         
         return best_parameters, result.success
 
@@ -505,20 +521,62 @@ class Alignment:
         current_hmi_image_index = None
 
         hmix, hmiy, hmi_data = None, None, None
+        current_interpolator = None
+
+        slit_times = [Time(t) for t in self.data_loader.changing_keywords["DATE-AVG"]]
+        hmi_indices = [self.find_nearest_hmi(t, self.data_loader.hmi_times) for t in slit_times]
 
         last_best = initial_guess
 
         for i in range(nx):
             slit_keywords = {key: [values[i]] for key, values in self.data_loader.changing_keywords.items()}
-            slit_time = Time(slit_keywords["DATE-AVG"][0])
             slit_intensities = self.data_loader.intensities[i:i+1, :]
 
-            best_hmi_index = self.find_nearest_hmi(slit_time, self.data_loader.hmi_times)
+            if i == 0 or i == nx - 1 or i % max(1, nx // 10) == 0:
+                self.cfg.log(f"Processing slit {i + 1}/{nx}")
+
+            best_hmi_index = hmi_indices[i]
             if best_hmi_index != current_hmi_image_index:
                 current_hmi_image_index = best_hmi_index
+                self.cfg.log(f"Switching to HMI image index {current_hmi_image_index}")
                 hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, current_hmi_image_index)
 
-            best_parameters, result = self.align(last_best, bounds, slit_keywords, slit_intensities, hmix, hmiy, hmi_data, delta = 20)
+                block_end = i + 1
+                while block_end < nx and hmi_indices[block_end] == current_hmi_image_index:
+                    block_end += 1
+
+                block_keywords = {
+                    key: values[i:block_end] for key, values in self.data_loader.changing_keywords.items()
+                }
+                reference_coordinates = self.construct_dkist_coords(
+                    self.data_loader.fixed_keywords,
+                    block_keywords,
+                    last_best
+                )
+                relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(
+                    reference_coordinates,
+                    hmix,
+                    hmiy,
+                    hmi_data,
+                    delta=20
+                )
+                current_interpolator = self.construct_interpolator(
+                    relevant_hmix,
+                    relevant_hmiy,
+                    relevant_hmi_data
+                )
+
+            best_parameters, result = self.align(
+                last_best,
+                bounds,
+                slit_keywords,
+                slit_intensities,
+                hmix,
+                hmiy,
+                hmi_data,
+                delta=20,
+                interpolator=current_interpolator
+            )
             last_best = best_parameters 
             
             coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters)
@@ -586,11 +644,9 @@ if __name__ == "__main__":
 
     run = True
  
-    print("Run =", run)
-    
     # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
-    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
-    # path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
+    #path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
 
     #path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
@@ -609,27 +665,28 @@ if __name__ == "__main__":
     wavelength_index=30, 
     verbose=True
     )
+    cfg.log("Run =", run)
 
     # Load and prepare  
-    print("LOADING DATA")
+    cfg.log("LOADING DATA")
     loader = DataLoader(cfg)
     loader.load()
 
     # Minimize
-    print("ALIGNING")
+    cfg.log("ALIGNING")
     
     alignment = Alignment(cfg, loader)
     original_dkist_coords = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, [0, 0, 0, 0, 0, 0])
 
 
     if run:
-        initial_guess = [0, 0, 0, 0, 0, 0]
+        initial_guess = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
         
         bounds = [(-20, 20), (-20, 20), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
         best_parameters, success, final_coordinates = alignment.main(initial_guess, bounds)
 
-        print('Optimization converged:', success)
-        print('Best parameters from rough alignment:', best_parameters)
+        cfg.log('Optimization converged:', success)
+        cfg.log('Best parameters from rough alignment:', best_parameters)
 
     else:
         best_parameters = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
@@ -690,6 +747,6 @@ if __name__ == "__main__":
 
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
-    print("DONE")
+    cfg.log("DONE")
 
     plt.show()
