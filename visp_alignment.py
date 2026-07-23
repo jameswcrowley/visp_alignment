@@ -879,6 +879,14 @@ if __name__ == "__main__":
     if not run:
         final_coordinates = coords_new
 
+    # Always build a middle-frame HMI background for the left two panels.
+    middle_image_time = loader.hmi_times[len(loader.hmi_times)//2]
+    best_idx = alignment.find_nearest_hmi(middle_image_time, loader.hmi_times)
+    hmix, hmiy, hmi_data = alignment.get_hmi(loader.hmi_files, best_idx)
+    relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(
+        coords_new, hmix, hmiy, hmi_data
+    )
+
     if use_synthetic_hmi_viz:
         synthetic_hmi_on_original_coords, synthetic_hmi_indices_original = alignment.build_synthetic_hmi_on_coords(
             original_dkist_coords,
@@ -898,12 +906,6 @@ if __name__ == "__main__":
             f"Built synthetic HMI on final coordinates using {len(np.unique(synthetic_hmi_indices))} HMI frames"
         )
     else:
-        middle_image_time = loader.hmi_times[len(loader.hmi_times)//2]
-        best_idx = alignment.find_nearest_hmi(middle_image_time, loader.hmi_times)
-        hmix, hmiy, hmi_data = alignment.get_hmi(loader.hmi_files, best_idx)
-        relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(
-            coords_new, hmix, hmiy, hmi_data
-        )
         interpolator = alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
 
         synthetic_hmi_on_original_coords = alignment.interpolate_hmi_to_coords(
@@ -918,10 +920,10 @@ if __name__ == "__main__":
     plt.figure(figsize = [12, 10])
     plt.subplot(3,2,1)
     if use_synthetic_hmi_viz:
-        plt.title('Original DKIST data over synthetic nearest-frame HMI')
+        plt.title('Original DKIST data over middle-frame HMI background')
     else:
         plt.title('Original DKIST data overlayed over original HMI data')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], synthetic_hmi_on_original_coords, cmap='grey', shading='auto')
+    plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
     plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap='plasma', alpha=0.8, shading='auto')
     plt.colorbar()
 
@@ -930,7 +932,7 @@ if __name__ == "__main__":
         plt.title('Difference between original DKIST and synthetic nearest-frame HMI')
     else:
         plt.title('Difference between original DKIST and HMI data')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], synthetic_hmi_on_original_coords, cmap='grey', shading='auto')
+    plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
     plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities - synthetic_hmi_on_original_coords, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
     plt.colorbar()
 
