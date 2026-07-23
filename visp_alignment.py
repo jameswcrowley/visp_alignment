@@ -23,11 +23,13 @@ class Config:
         path_to_dkist_data: str,
         path_to_sunpy: str,
         wavelength_index = None,
+        raster_repeats = None,
         verbose = False
     ):
         self.path_to_dkist_data = path_to_dkist_data
         self.path_to_sunpy = path_to_sunpy
         self.wavelength_index = wavelength_index
+        self.raster_repeats = raster_repeats
         self.verbose = verbose
 
     def log(self, *args, **kwargs):
@@ -56,6 +58,37 @@ class DataLoader:
         tuple: A tuple containing the start and end times of the DKIST data in the folder
         """
         return (changing_keywords["DATE-AVG"][0], changing_keywords["DATE-AVG"][-1])
+
+    def _normalize_raster_repeat_selection(self, repeat_count):
+        selection = self.cfg.raster_repeats
+
+        if selection is None:
+            return list(range(repeat_count))
+
+        if isinstance(selection, (int, np.integer)):
+            requested = [int(selection)]
+        else:
+            requested = [int(value) for value in selection]
+
+        if not requested:
+            raise ValueError("raster_repeats must select at least one repeat")
+
+        if any(value < 0 for value in requested):
+            raise ValueError("raster_repeats cannot contain negative repeat indices")
+
+        if 0 in requested:
+            selected = requested
+        elif max(requested) <= repeat_count:
+            selected = [value - 1 for value in requested]
+        else:
+            selected = requested
+
+        if any(value >= repeat_count for value in selected):
+            raise ValueError(
+                f"Requested raster repeat(s) {requested} exceed available repeats {repeat_count}"
+            )
+
+        return selected
 
     def normalize(self, arr):
         arr = np.asarray(arr, dtype=float)
@@ -149,6 +182,7 @@ class DataLoader:
 
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
+        selected_repeat_indices = getattr(self, "selected_raster_repeats", [0])
 
         # print(f'Dataset loaded from {asdf_path} with shape {ds[:, :, :, :].data.shape}')
         #TODO: figure out how to optimize getting data from ds
@@ -156,7 +190,8 @@ class DataLoader:
         if ds.wcs.pixel_n_dim == 4:
             all_data = np.array(ds[0, :, :, :].data) # load all slits, slit positions, and wavelenghths of the dataset across the first Stoke/Raster
         elif ds.wcs.pixel_n_dim == 5:
-            all_data = np.array(ds[0, 0, :, :, :].data) # load all slits, slit positions, and  wavelenghths of the dataset across the first Stoke and raster
+            repeat_slices = [np.array(ds[0, repeat_index, :, :, :].data) for repeat_index in selected_repeat_indices]
+            all_data = np.concatenate(repeat_slices, axis=0) if len(repeat_slices) > 1 else repeat_slices[0]
         else:
             all_data = np.array(ds[:, :, :].data)
         
@@ -171,6 +206,7 @@ class DataLoader:
         self.cfg.log("Checks if there are any non nan values", not np.isnan(relevant_data).all())
 
         mean_data = np.nanmean(relevant_data, axis = 1) # mean of the data across the wavelength samples above the threshold
+
         mean_data = self.normalize(mean_data)
         return mean_data 
     
@@ -224,6 +260,30 @@ class DataLoader:
             "PC3_1": header["PC3_1"],
             "PC3_3": header["PC3_3"]
         }
+
+        slits_per_repeat = int(header.get("nx", header.get("NX", header["DNAXIS3"])))
+        total_files = len(fits_files)
+        repeat_count = total_files // slits_per_repeat
+
+        if repeat_count == 0:
+            raise ValueError("No complete raster repeats were found in the DKIST FITS files")
+
+        usable_file_count = repeat_count * slits_per_repeat
+        if usable_file_count != total_files:
+            self.cfg.log(
+                f"Ignoring {total_files - usable_file_count} trailing FITS file(s) that do not form a complete repeat"
+            )
+
+        selected_repeat_indices = self._normalize_raster_repeat_selection(repeat_count)
+        self.repeat_ranges = []
+        selected_fits_files = []
+
+        for repeat_index in selected_repeat_indices:
+            repeat_start = repeat_index * slits_per_repeat
+            repeat_end = repeat_start + slits_per_repeat
+            selected_fits_files.extend(fits_files[repeat_start:repeat_end])
+            self.repeat_ranges.append((len(selected_fits_files) - slits_per_repeat, len(selected_fits_files)))
+
         changing_keywords = {
             "CRVAL1": [],
             "CRVAL3": [],
@@ -231,17 +291,20 @@ class DataLoader:
             "CRPIX3": [],
             "DATE-AVG": []
         }
-        # TODO handle raster repeats
-        nx = fixed_keywords["DNAXIS3"]
-        for i in range(nx):
-            header = fits.open(os.path.join(self.cfg.path_to_dkist_data, fits_files[i]))[1].header
+
+        for i in range(len(selected_fits_files)):
+            header = fits.open(os.path.join(self.cfg.path_to_dkist_data, selected_fits_files[i]))[1].header
             changing_keywords["CRVAL1"].append(header["CRVAL1"])
             changing_keywords["CRVAL3"].append(header["CRVAL3"])
             changing_keywords["CRPIX1"].append(header["CRPIX1"])
             changing_keywords["CRPIX3"].append(header["CRPIX3"])
             changing_keywords["DATE-AVG"].append(header["DATE-AVG"])
         
-        return fixed_keywords, changing_keywords, fits_files
+        self.slits_per_repeat = slits_per_repeat
+        self.repeat_count = repeat_count
+        self.selected_raster_repeats = selected_repeat_indices
+
+        return fixed_keywords, changing_keywords, selected_fits_files
         
 
     def load(self):
@@ -266,6 +329,12 @@ class DataLoader:
 
         self.cfg.log("Building DKIST intensity map")
         self.intensities = self.get_dkist_wavelengths()
+
+        if self.intensities.shape[0] != len(self.changing_keywords["DATE-AVG"]):
+            raise ValueError(
+                "DKIST intensity rows do not match the selected raster repeat headers: "
+                f"intensities={self.intensities.shape[0]}, headers={len(self.changing_keywords['DATE-AVG'])}"
+            )
 
         self.cfg.log("Loading HMI reference data")
         self.middle_hmix, self.middle_hmiy, self.middle_hmi_data, self.hmi_files = self.load_hmi(Time(self.start_time), Time(self.end_time))
@@ -332,12 +401,7 @@ class Alignment:
         pc3_1 = fixed_keywords['PC3_1'] + pc3_1_shift
         pc3_3 = fixed_keywords['PC3_3'] + pc3_3_shift
 
-        # TODO Handle raster repeats 
-        nx = None
-        if len(changing_keywords["CRVAL1"]) > fixed_keywords['DNAXIS3']:
-            nx = fixed_keywords['DNAXIS3']
-        else:
-            nx = len(changing_keywords["CRVAL1"])
+        nx = len(changing_keywords["CRVAL1"])
 
         ny = fixed_keywords['DNAXIS1']
 
@@ -347,11 +411,10 @@ class Alignment:
 
         j = np.arange(ny)[None, :] + 1
 
-        #TODO: Figure out what to do about raster repeats
-        crval1 = np.asarray(changing_keywords["CRVAL1"])[:nx, None] + crval1_shift
-        crval3 = np.asarray(changing_keywords["CRVAL3"])[:nx, None] + crval3_shift
-        crpix1 = np.asarray(changing_keywords["CRPIX1"])[:nx, None]
-        crpix3 = np.asarray(changing_keywords["CRPIX3"])[:nx, None]
+        crval1 = np.asarray(changing_keywords["CRVAL1"])[:, None] + crval1_shift
+        crval3 = np.asarray(changing_keywords["CRVAL3"])[:, None] + crval3_shift
+        crpix1 = np.asarray(changing_keywords["CRPIX1"])[:, None]
+        crpix3 = np.asarray(changing_keywords["CRPIX3"])[:, None]
 
         x = crval3 + cdelt3 * (pc3_3 * (i - crpix3) + pc3_1 * (j - crpix1))
 
@@ -599,104 +662,112 @@ class Alignment:
         pc_delta=0,
     ):
 
-        nx = self.data_loader.fixed_keywords['DNAXIS3']
         ny = self.data_loader.fixed_keywords['DNAXIS1']
+        repeat_ranges = getattr(self.data_loader, "repeat_ranges", None)
+        if not repeat_ranges:
+            repeat_ranges = [(0, len(self.data_loader.changing_keywords["DATE-AVG"]))]
 
-        final_coordinates = np.zeros((nx, ny, 2))
+        total_slits = sum(end - start for start, end in repeat_ranges)
+        final_coordinates = np.zeros((total_slits, ny, 2))
 
         fitted_parameters = None
         if return_fitted_parameters or save_fitted_parameters_path is not None:
-            fitted_parameters = np.zeros((nx, len(initial_guess)))
+            fitted_parameters = np.zeros((total_slits, len(initial_guess)))
 
-        current_hmi_image_index = None
+        write_index = 0
 
-        hmix = None
-        hmiy = None
-        hmi_data = None
-        current_interpolator = None
+        for repeat_number, (repeat_start, repeat_end) in enumerate(repeat_ranges):
+            repeat_nx = repeat_end - repeat_start
+            self.cfg.log(
+                f"Aligning raster repeat {repeat_number + 1}/{len(repeat_ranges)} with {repeat_nx} slits"
+            )
 
-        slit_times = [Time(t) for t in self.data_loader.changing_keywords["DATE-AVG"]]
+            current_hmi_image_index = None
+            hmix = None
+            hmiy = None
+            hmi_data = None
+            current_interpolator = None
 
-        # Use nearest HMI frame for each slit
-        hmi_indices = [self.find_nearest_hmi(t, self.data_loader.hmi_times) for t in slit_times]
+            slit_times = [Time(t) for t in self.data_loader.changing_keywords["DATE-AVG"][repeat_start:repeat_end]]
+            hmi_indices = [self.find_nearest_hmi(t, self.data_loader.hmi_times) for t in slit_times]
 
-        self.cfg.log(f"Using {len(np.unique(hmi_indices))} unique HMI frames for {nx} slits")
+            self.cfg.log(f"Using {len(np.unique(hmi_indices))} unique HMI frames for repeat {repeat_number + 1}")
 
-        global_best = np.array(initial_guess, dtype=float)
-        last_best   = global_best.copy()
+            global_best = np.array(initial_guess, dtype=float)
+            last_best = global_best.copy()
 
+            for local_i in range(repeat_nx):
+                global_i = repeat_start + local_i
+                slit_keywords = {key: [values[global_i]] for key, values in self.data_loader.changing_keywords.items()}
+                slit_intensities = self.data_loader.intensities[global_i:global_i + 1, :]
 
-        for i in range(nx):
-            slit_keywords = {key: [values[i]] for key, values in self.data_loader.changing_keywords.items()}
-            slit_intensities = self.data_loader.intensities[i:i + 1, :]
+                if (local_i == 0 or local_i == repeat_nx - 1 or local_i % max(1, repeat_nx // 10) == 0):
+                    self.cfg.log(f"Processing slit {local_i + 1}/{repeat_nx} in repeat {repeat_number + 1}")
 
-            if (i == 0 or i == nx - 1 or i % max(1, nx // 10) == 0):
-                self.cfg.log(f"Processing slit {i + 1}/{nx}")
+                best_hmi_index = hmi_indices[local_i]
 
-            best_hmi_index = hmi_indices[i]
+                if best_hmi_index != current_hmi_image_index:
+                    current_hmi_image_index = best_hmi_index
 
-            # Rebuild interpolator whenever HMI frame changes
-            if best_hmi_index != current_hmi_image_index:
-                current_hmi_image_index = best_hmi_index
+                    self.cfg.log(f"Switching to HMI image index {current_hmi_image_index}")
 
-                self.cfg.log(f"Switching to HMI image index {current_hmi_image_index}")
+                    hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, current_hmi_image_index)
 
-                hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, current_hmi_image_index)
+                    block_end = local_i + 1
+                    while block_end < repeat_nx and hmi_indices[block_end] == current_hmi_image_index:
+                        block_end += 1
 
-                block_end = i + 1
+                    block_keywords = {
+                        key: values[repeat_start + local_i:repeat_start + block_end]
+                        for key, values in self.data_loader.changing_keywords.items()
+                    }
 
-                while block_end < nx and hmi_indices[block_end] == current_hmi_image_index:
-                    block_end += 1
+                    reference_coordinates = self.construct_dkist_coords(
+                        self.data_loader.fixed_keywords,
+                        block_keywords,
+                        last_best,
+                    )
 
-                block_keywords = {key: values[i:block_end] for key, values in self.data_loader.changing_keywords.items()}
+                    relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(
+                        reference_coordinates,
+                        hmix,
+                        hmiy,
+                        hmi_data,
+                        delta=20,
+                    )
 
-                reference_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, block_keywords, last_best)
+                    current_interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
 
-                relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(
-                    reference_coordinates,
+                current_bounds = [
+                    (global_best[0] - crval_delta, global_best[0] + crval_delta),
+                    (global_best[1] - crval_delta, global_best[1] + crval_delta),
+                    (global_best[2] - pc_delta, global_best[2] + pc_delta),
+                    (global_best[3] - pc_delta, global_best[3] + pc_delta),
+                    (global_best[4] - pc_delta, global_best[4] + pc_delta),
+                    (global_best[5] - pc_delta, global_best[5] + pc_delta),
+                ]
+
+                best_parameters, result = self.align(
+                    last_best,
+                    current_bounds,
+                    slit_keywords,
+                    slit_intensities,
                     hmix,
                     hmiy,
                     hmi_data,
                     delta=20,
+                    interpolator=current_interpolator,
+                    reference_parameters=last_best,
                 )
 
-                current_interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+                if fitted_parameters is not None:
+                    fitted_parameters[write_index] = best_parameters
 
-            # Bounds centered on previous slit
-            current_bounds = [
-                (global_best[0] - crval_delta, global_best[0] + crval_delta),
-                (global_best[1] - crval_delta, global_best[1] + crval_delta),
-                (global_best[2] - pc_delta, global_best[2] + pc_delta),
-                (global_best[3] - pc_delta, global_best[3] + pc_delta),
-                (global_best[4] - pc_delta, global_best[4] + pc_delta),
-                (global_best[5] - pc_delta, global_best[5] + pc_delta),
-            ] 
+                coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters)
+                final_coordinates[write_index] = coords[0]
 
-            # Fit slit using previous slit as regularization reference
-            best_parameters, result = self.align(
-                last_best,
-                current_bounds,
-                slit_keywords,
-                slit_intensities,
-                hmix,
-                hmiy,
-                hmi_data,
-                delta=20,
-                interpolator=current_interpolator,
-                reference_parameters=last_best,
-            )
-
-            # Store fitted parameters
-            if fitted_parameters is not None:
-                fitted_parameters[i] = best_parameters
-
-            # Generate final slit coordinates
-            coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters)
-
-            final_coordinates[i] = coords[0]
-
-            # Update reference for next slit
-            last_best = np.array(best_parameters, dtype=float)
+                last_best = np.array(best_parameters, dtype=float)
+                write_index += 1
 
         if save_fitted_parameters_path is not None and fitted_parameters is not None:
             np.save(save_fitted_parameters_path, fitted_parameters)
@@ -776,40 +847,7 @@ class Alignment:
 
 
     def align_by_blocks(self, initial_guess, bounds):
-        nx = self.data_loader.fixed_keywords['DNAXIS3']
-        ny = self.data_loader.fixed_keywords['DNAXIS1']
-
-        final_coordinates = np.zeros((nx, ny, 2))
-
-        current_hmi_image_index = None
-        last_best = initial_guess
-        start = 0
-        best_hmi_index = None
-
-        for i in range(nx):
-            slit_time = Time(self.data_loader.changing_keywords["DATE-AVG"][i])
-            best_hmi_index = self.find_nearest_hmi(
-                slit_time, self.data_loader.hmi_times
-            )
-
-            if best_hmi_index != current_hmi_image_index and i != start:
-                current_hmi_image_index = best_hmi_index
-
-                best_parameters, coords = self._process_block(
-                    start, i, current_hmi_image_index, last_best, bounds
-                )
-                last_best = best_parameters
-                final_coordinates[start:i] = coords
-                last_best = best_parameters
-
-                start = i
-
-        best_parameters, coords = self._process_block(
-            start, nx, best_hmi_index, last_best, bounds
-        )
-        final_coordinates[start:nx] = coords
-
-        return final_coordinates
+        return self.align_slit_by_slit(initial_guess, bounds)
 
 if __name__ == "__main__":
 
@@ -818,6 +856,7 @@ if __name__ == "__main__":
  
     # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
     #path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    #path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_4_62/IHFDSO"
     path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
 
@@ -835,6 +874,7 @@ if __name__ == "__main__":
     path_to_dkist_data=path_to_dkist_data, 
     path_to_sunpy=path_to_sunpy, 
     wavelength_index=30, 
+    raster_repeats=0,
     verbose=True
     )
     cfg.log("Run =", run)
@@ -843,6 +883,7 @@ if __name__ == "__main__":
     cfg.log("LOADING DATA")
     loader = DataLoader(cfg)
     loader.load()
+    cfg.log(f"Requested raster repeats: {cfg.raster_repeats}")
 
     # Minimize
     cfg.log("ALIGNING")
@@ -917,70 +958,97 @@ if __name__ == "__main__":
 
         cfg.log("Using legacy single-frame HMI visualization mode")
 
-    plt.figure(figsize = [12, 10])
-    plt.subplot(3,2,1)
-    if use_synthetic_hmi_viz:
-        plt.title('Original DKIST data over middle-frame HMI background')
-    else:
-        plt.title('Original DKIST data overlayed over original HMI data')
-    plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities, cmap='plasma', alpha=0.8, shading='auto')
-    plt.colorbar()
+    repeat_ranges = getattr(loader, "repeat_ranges", [(0, final_coordinates.shape[0])])
+    repeat_count = len(repeat_ranges)
+    save_path = Path(save_path)
+    use_repeat_synthetic_hmi_viz = use_synthetic_hmi_viz
 
-    plt.subplot(3,2,2)
-    if use_synthetic_hmi_viz:
-        plt.title('Difference between original DKIST and synthetic nearest-frame HMI')
-    else:
-        plt.title('Difference between original DKIST and HMI data')
-    plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
-    plt.pcolormesh(original_dkist_coords[:, :, 0], original_dkist_coords[:, :, 1], loader.intensities - synthetic_hmi_on_original_coords, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
-    plt.colorbar()
+    for repeat_number, (repeat_start, repeat_end) in enumerate(repeat_ranges, start=1):
+        repeat_original_coords = original_dkist_coords[repeat_start:repeat_end]
+        repeat_final_coordinates = final_coordinates[repeat_start:repeat_end]
+        repeat_intensities = loader.intensities[repeat_start:repeat_end]
+        repeat_synthetic_original = synthetic_hmi_on_original_coords[repeat_start:repeat_end]
+        repeat_synthetic_final = synthetic_hmi_on_final_coords[repeat_start:repeat_end]
+        repeat_slit_params = None
+        if slit_fitted_parameters is not None:
+            repeat_slit_params = slit_fitted_parameters[repeat_start:repeat_end]
 
-    plt.subplot(3,2,3)
-    if use_synthetic_hmi_viz:
-        plt.title('DKIST data after slit-by-slit over synthetic nearest-frame HMI')
-    else:
-        plt.title('DKIST data after slit-by-slit')
-    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], synthetic_hmi_on_final_coords, cmap='grey', shading='auto')
-    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities, cmap='plasma', alpha=0.8, shading='auto')
-    plt.colorbar()
+        if repeat_original_coords.shape[0] != repeat_intensities.shape[0] or repeat_final_coordinates.shape[0] != repeat_intensities.shape[0]:
+            cfg.log(
+                f"Skipping repeat {repeat_number}/{repeat_count} plot because coordinate and intensity shapes do not match: "
+                f"original={repeat_original_coords.shape}, final={repeat_final_coordinates.shape}, intensities={repeat_intensities.shape}"
+            )
+            continue
 
-    plt.subplot(3,2,4)
-    if use_synthetic_hmi_viz:
-        plt.title('Difference between DKIST after slit-by-slit and synthetic nearest-frame HMI')
-    else:
-        plt.title('Difference between DKIST after slit-by-slit and HMI data')
-    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], synthetic_hmi_on_final_coords, cmap='grey', shading='auto')
-    plt.pcolormesh(final_coordinates[:, :, 0], final_coordinates[:, :, 1], loader.intensities - synthetic_hmi_on_final_coords, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
-    plt.colorbar()
+        fig = plt.figure(figsize=[12, 10])
 
-    ax_params = plt.subplot(3,1,3)
-    if slit_fitted_parameters is not None:
-        slit_indices = np.arange(slit_fitted_parameters.shape[0])
-        parameter_names = [
-            'CRVAL1 shift',
-            'CRVAL3 shift',
-            'PC1_1 shift',
-            'PC3_1 shift',
-            'PC1_3 shift',
-            'PC3_3 shift',
-        ]
-        for p_idx, p_name in enumerate(parameter_names):
-            ax_params.plot(slit_indices, slit_fitted_parameters[:, p_idx], label=p_name)
+        plt.subplot(3, 2, 1)
+        if use_repeat_synthetic_hmi_viz:
+            plt.title(f'Original DKIST data over middle-frame HMI background (repeat {repeat_number})')
+        else:
+            plt.title(f'Original DKIST data overlayed over original HMI data (repeat {repeat_number})')
+        plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
+        plt.pcolormesh(repeat_original_coords[:, :, 0], repeat_original_coords[:, :, 1], repeat_intensities, cmap='plasma', alpha=0.8, shading='auto')
+        plt.colorbar()
 
-        ax_params.set_title('Evolution of fitted slit-by-slit parameters across raster')
-        ax_params.set_xlabel('Slit index')
-        ax_params.set_ylabel('Parameter value')
-        ax_params.grid(True, alpha=0.3)
-        ax_params.legend(loc='best', fontsize=8, ncol=2)
-    else:
-        ax_params.set_title('Evolution of fitted slit-by-slit parameters across raster')
-        ax_params.text(0.5, 0.5, 'No slit-by-slit fitted parameters available', ha='center', va='center')
-        ax_params.set_axis_off()
+        plt.subplot(3, 2, 2)
+        if use_repeat_synthetic_hmi_viz:
+            plt.title(f'Difference between original DKIST and synthetic nearest-frame HMI (repeat {repeat_number})')
+        else:
+            plt.title(f'Difference between original DKIST and HMI data (repeat {repeat_number})')
+        plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
+        plt.pcolormesh(repeat_original_coords[:, :, 0], repeat_original_coords[:, :, 1], repeat_intensities - repeat_synthetic_original, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
+        plt.colorbar()
 
-    plt.tight_layout()
+        plt.subplot(3, 2, 3)
+        if use_repeat_synthetic_hmi_viz:
+            plt.title(f'DKIST data after slit-by-slit over synthetic nearest-frame HMI (repeat {repeat_number})')
+        else:
+            plt.title(f'DKIST data after slit-by-slit (repeat {repeat_number})')
+        plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
+        plt.pcolormesh(repeat_final_coordinates[:, :, 0], repeat_final_coordinates[:, :, 1], repeat_intensities, cmap='plasma', alpha=1, shading='auto')
+        plt.colorbar()
 
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.subplot(3, 2, 4)
+        if use_repeat_synthetic_hmi_viz:
+            plt.title(f'Difference between DKIST after slit-by-slit and synthetic nearest-frame HMI (repeat {repeat_number})')
+        else:
+            plt.title(f'Difference between DKIST after slit-by-slit and HMI data (repeat {repeat_number})')
+        plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
+        plt.pcolormesh(repeat_final_coordinates[:, :, 0], repeat_final_coordinates[:, :, 1], repeat_intensities - repeat_synthetic_final, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
+        plt.colorbar()
+
+        ax_params = plt.subplot(3, 1, 3)
+        if repeat_slit_params is not None:
+            slit_indices = np.arange(repeat_slit_params.shape[0])
+            parameter_names = [
+                'CRVAL1 shift',
+                'CRVAL3 shift',
+                'PC1_1 shift',
+                'PC3_1 shift',
+                'PC1_3 shift',
+                'PC3_3 shift',
+            ]
+            for p_idx, p_name in enumerate(parameter_names):
+                ax_params.plot(slit_indices, repeat_slit_params[:, p_idx], label=p_name)
+
+            ax_params.set_title(f'Evolution of fitted slit-by-slit parameters across raster repeat {repeat_number}')
+            ax_params.set_xlabel('Slit index')
+            ax_params.set_ylabel('Parameter value')
+            ax_params.grid(True, alpha=0.3)
+            ax_params.legend(loc='best', fontsize=8, ncol=2)
+        else:
+            ax_params.set_title(f'Evolution of fitted slit-by-slit parameters across raster repeat {repeat_number}')
+            ax_params.text(0.5, 0.5, 'No slit-by-slit fitted parameters available', ha='center', va='center')
+            ax_params.set_axis_off()
+
+        plt.tight_layout()
+
+        if repeat_count == 1:
+            fig.savefig(save_path, dpi=300, bbox_inches='tight')
+        else:
+            repeat_save_path = save_path.with_name(f"{save_path.stem}_repeat_{repeat_number}{save_path.suffix}")
+            fig.savefig(repeat_save_path, dpi=300, bbox_inches='tight')
 
     cfg.log("DONE")
 
