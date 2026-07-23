@@ -12,6 +12,7 @@ import os
 from scipy import interpolate as interp
 import scipy.optimize as opt
 import bisect
+from itertools import chain
 
 class Config:
     """
@@ -328,7 +329,7 @@ class DataLoader:
         self.cfg.log(f"DKIST time span: {self.start_time} to {self.end_time}")
 
         self.cfg.log("Building DKIST intensity map")
-        self.intensities = self.get_dkist_wavelengths()
+        self.intensities = self.get_dkist_wavelengths2()
 
         if self.intensities.shape[0] != len(self.changing_keywords["DATE-AVG"]):
             raise ValueError(
@@ -581,13 +582,21 @@ class Alignment:
         """   
         self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
 
+        # middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
+
+        # middle_hmi_idx = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_times)
+
+        # hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, middle_hmi_idx)
+
+        # best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
+
         best_parameters = initial_guess
         result = True
 
-        crval_delta = 1
+        crval_delta = 3
         pc_delta = 0
 
-        bounds = [(best_parameters[0], best_parameters[0]), (best_parameters[1] - crval_delta, best_parameters[1] + crval_delta), (best_parameters[2] - pc_delta, best_parameters[2] + pc_delta), (best_parameters[3] - pc_delta, best_parameters[3] + pc_delta), (best_parameters[4] - pc_delta, best_parameters[4] + pc_delta), (best_parameters[5] - pc_delta, best_parameters[5] + pc_delta)]
+        bounds = [(best_parameters[0] - crval_delta, best_parameters[0] + crval_delta), (best_parameters[1] - crval_delta, best_parameters[1] + crval_delta), (best_parameters[2] - pc_delta, best_parameters[2] + pc_delta), (best_parameters[3] - pc_delta, best_parameters[3] + pc_delta), (best_parameters[4] - pc_delta, best_parameters[4] + pc_delta), (best_parameters[5] - pc_delta, best_parameters[5] + pc_delta)]
          
         self.cfg.log("Aligning by slits")
         slit_by_slit_result = self.align_slit_by_slit(
@@ -658,8 +667,6 @@ class Alignment:
         bounds,
         return_fitted_parameters=False,
         save_fitted_parameters_path=None,
-        crval_delta=0.2,
-        pc_delta=0,
     ):
 
         ny = self.data_loader.fixed_keywords['DNAXIS1']
@@ -673,8 +680,6 @@ class Alignment:
         fitted_parameters = None
         if return_fitted_parameters or save_fitted_parameters_path is not None:
             fitted_parameters = np.zeros((total_slits, len(initial_guess)))
-
-        write_index = 0
 
         for repeat_number, (repeat_start, repeat_end) in enumerate(repeat_ranges):
             repeat_nx = repeat_end - repeat_start
@@ -696,7 +701,13 @@ class Alignment:
             global_best = np.array(initial_guess, dtype=float)
             last_best = global_best.copy()
 
-            for local_i in range(repeat_nx):
+            # TODO Split in to a helper function and two for loops
+            start, mid, end = 0, repeat_nx//2, repeat_nx
+
+            for local_i in chain(range(mid, end), range(mid - 1, start - 1, -1)): 
+                if local_i == mid-1:
+                    last_best = global_best.copy()
+
                 global_i = repeat_start + local_i
                 slit_keywords = {key: [values[global_i]] for key, values in self.data_loader.changing_keywords.items()}
                 slit_intensities = self.data_loader.intensities[global_i:global_i + 1, :]
@@ -738,18 +749,9 @@ class Alignment:
 
                     current_interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
 
-                current_bounds = [
-                    (global_best[0] - crval_delta, global_best[0] + crval_delta),
-                    (global_best[1] - crval_delta, global_best[1] + crval_delta),
-                    (global_best[2] - pc_delta, global_best[2] + pc_delta),
-                    (global_best[3] - pc_delta, global_best[3] + pc_delta),
-                    (global_best[4] - pc_delta, global_best[4] + pc_delta),
-                    (global_best[5] - pc_delta, global_best[5] + pc_delta),
-                ]
-
                 best_parameters, result = self.align(
                     last_best,
-                    current_bounds,
+                    bounds,
                     slit_keywords,
                     slit_intensities,
                     hmix,
@@ -761,13 +763,13 @@ class Alignment:
                 )
 
                 if fitted_parameters is not None:
-                    fitted_parameters[write_index] = best_parameters
+                    fitted_parameters[local_i] = best_parameters
 
                 coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters)
-                final_coordinates[write_index] = coords[0]
+                final_coordinates[local_i] = coords[0]
 
                 last_best = np.array(best_parameters, dtype=float)
-                write_index += 1
+                local_i += 1
 
         if save_fitted_parameters_path is not None and fitted_parameters is not None:
             np.save(save_fitted_parameters_path, fitted_parameters)
@@ -847,7 +849,40 @@ class Alignment:
 
 
     def align_by_blocks(self, initial_guess, bounds):
-        return self.align_slit_by_slit(initial_guess, bounds)
+        nx = self.data_loader.fixed_keywords['DNAXIS3']
+        ny = self.data_loader.fixed_keywords['DNAXIS1']
+
+        final_coordinates = np.zeros((nx, ny, 2))
+
+        current_hmi_image_index = None
+        last_best = initial_guess
+        start = 0
+        best_hmi_index = None
+
+        for i in range(nx):
+            slit_time = Time(self.data_loader.changing_keywords["DATE-AVG"][i])
+            best_hmi_index = self.find_nearest_hmi(
+                slit_time, self.data_loader.hmi_times
+            )
+
+            if best_hmi_index != current_hmi_image_index and i != start:
+                current_hmi_image_index = best_hmi_index
+
+                best_parameters, coords = self._process_block(
+                    start, i, current_hmi_image_index, last_best, bounds
+                )
+                last_best = best_parameters
+                final_coordinates[start:i] = coords
+                last_best = best_parameters
+
+                start = i
+
+        best_parameters, coords = self._process_block(
+            start, nx, best_hmi_index, last_best, bounds
+        )
+        final_coordinates[start:nx] = coords
+
+        return final_coordinates
 
 if __name__ == "__main__":
 
@@ -855,9 +890,9 @@ if __name__ == "__main__":
     use_synthetic_hmi_viz = True
  
     # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
-    #path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
     #path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_4_62/IHFDSO"
-    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
+    # path_to_dkist_data = "/Users/jamescrowley/Documents/?summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
 
     #path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
@@ -896,7 +931,7 @@ if __name__ == "__main__":
 
     if run:
         initial_guess = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
-        
+        # initial_guess = [0,0,0,0,0,0]
         bounds = [(-20, 20), (-20, 20), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
         save_slit_fit_parameters_path = os.path.join(output_folder, "slit_fit_parameters.npy")
         best_parameters, success, final_coordinates, slit_fitted_parameters = alignment.main(
