@@ -607,9 +607,9 @@ class Alignment:
         )
 
         if return_slit_fitted_parameters:
-            final_coordinates, slit_fitted_parameters = slit_by_slit_result
-            self.cfg.log("Final coordinates and slit-by-slit parameters determined")
-            return best_parameters, result, final_coordinates, slit_fitted_parameters
+            final_coordinates, slit_fitted_parameters, slit_fitted_losses = slit_by_slit_result
+            self.cfg.log("Final coordinates, slit-by-slit parameters, and losses determined")
+            return best_parameters, result, final_coordinates, slit_fitted_parameters, slit_fitted_losses
 
         final_coordinates = slit_by_slit_result
         self.cfg.log("Final coordinates determined")
@@ -655,9 +655,9 @@ class Alignment:
 
         best_parameters = result.x
 
-        self.cfg.log(f"Optimization success={result.success}, best parameters={best_parameters}")
+        self.cfg.log(f"Optimization success={result.success}, best parameters={best_parameters}, loss={result.fun}")
 
-        return best_parameters, result.success
+        return best_parameters, result.success, result.fun
 
     def align_slit_by_slit(
         self,
@@ -676,8 +676,10 @@ class Alignment:
         final_coordinates = np.zeros((total_slits, ny, 2))
 
         fitted_parameters = None
+        fitted_losses = None
         if return_fitted_parameters or save_fitted_parameters_path is not None:
             fitted_parameters = np.zeros((total_slits, len(initial_guess)))
+            fitted_losses = np.zeros(total_slits)
 
         for repeat_number, (repeat_start, repeat_end) in enumerate(repeat_ranges):
             repeat_nx = repeat_end - repeat_start
@@ -747,7 +749,7 @@ class Alignment:
 
                     current_interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
 
-                best_parameters, result = self.align(
+                best_parameters, result, loss_value = self.align(
                     last_best,
                     bounds,
                     slit_keywords,
@@ -762,6 +764,8 @@ class Alignment:
 
                 if fitted_parameters is not None:
                     fitted_parameters[local_i] = best_parameters
+                if fitted_losses is not None:
+                    fitted_losses[local_i] = loss_value
 
                 coords = self.construct_dkist_coords(self.data_loader.fixed_keywords, slit_keywords, best_parameters)
                 final_coordinates[local_i] = coords[0]
@@ -773,10 +777,34 @@ class Alignment:
             np.save(save_fitted_parameters_path, fitted_parameters)
             self.cfg.log(f"Saved slit-by-slit fitted parameters to {save_fitted_parameters_path}")
 
+            save_fitted_parameters_path = Path(save_fitted_parameters_path)
+            losses_path = save_fitted_parameters_path.with_name(
+                f"{save_fitted_parameters_path.stem}_losses{save_fitted_parameters_path.suffix}"
+            )
+            np.save(losses_path, fitted_losses)
+            self.cfg.log(f"Saved slit-by-slit fitted losses to {losses_path}")
+
         if return_fitted_parameters:
-            return final_coordinates, fitted_parameters
+            return final_coordinates, fitted_parameters, fitted_losses
 
         return final_coordinates
+
+    def _process_synthetic_hmi_block(self, start, end, hmi_index, coords, delta):
+        hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, hmi_index)
+
+        block_coords = coords[start:end]
+
+        relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(
+            block_coords,
+            hmix,
+            hmiy,
+            hmi_data,
+            delta=delta,
+        )
+
+        interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+
+        return self.interpolate_hmi_to_coords(interpolator, block_coords)
 
     def build_synthetic_hmi_on_coords(self, coords, hmi_indices=None, delta=20):
         """
@@ -798,31 +826,33 @@ class Alignment:
         nx = coords.shape[0]
         synthetic_hmi = np.full((coords.shape[0], coords.shape[1]), np.nan, dtype=float)
 
-        if hmi_indices is None:
-            slit_times = [Time(t) for t in self.data_loader.changing_keywords["DATE-AVG"]][:nx]
-            hmi_indices = [self.find_nearest_hmi(t, self.data_loader.hmi_times) for t in slit_times]
+        compute_indices = hmi_indices is None
+        if compute_indices:
+            hmi_indices = []
 
+        current_hmi_image_index = None
+        best_hmi_index = None
         start = 0
-        while start < nx:
-            hmi_index = hmi_indices[start]
-            end = start + 1
-            while end < nx and hmi_indices[end] == hmi_index:
-                end += 1
 
-            hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, hmi_index)
-            block_coords = coords[start:end]
+        for i in range(nx):
+            if compute_indices:
+                slit_time = Time(self.data_loader.changing_keywords["DATE-AVG"][i])
+                best_hmi_index = self.find_nearest_hmi(slit_time, self.data_loader.hmi_times)
+                hmi_indices.append(best_hmi_index)
+            else:
+                best_hmi_index = hmi_indices[i]
 
-            relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(
-                block_coords,
-                hmix,
-                hmiy,
-                hmi_data,
-                delta=delta,
-            )
+            if best_hmi_index != current_hmi_image_index and i != start:
+                synthetic_hmi[start:i] = self._process_synthetic_hmi_block(
+                    start, i, current_hmi_image_index, coords, delta
+                )
+                start = i
 
-            interpolator = self.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
-            synthetic_hmi[start:end, :] = self.interpolate_hmi_to_coords(interpolator, block_coords)
-            start = end
+            current_hmi_image_index = best_hmi_index
+
+        synthetic_hmi[start:nx] = self._process_synthetic_hmi_block(
+            start, nx, current_hmi_image_index, coords, delta
+        )
 
         return synthetic_hmi, hmi_indices
     
@@ -834,7 +864,7 @@ class Alignment:
         }
         block_intensities = self.data_loader.intensities[start:end, :]
 
-        best_parameters, result = self.align(
+        best_parameters, result, loss_value = self.align(
             last_best, bounds, block_keywords, block_intensities,
             hmix, hmiy, hmi_data, delta=20
         )
@@ -874,8 +904,6 @@ class Alignment:
             )
 
             if best_hmi_index != current_hmi_image_index and i != start:
-                current_hmi_image_index = best_hmi_index
-
                 best_parameters, coords = self._process_block(
                     start, i, current_hmi_image_index, last_best, bounds
                 )
@@ -887,8 +915,10 @@ class Alignment:
 
                 start = i
 
+            current_hmi_image_index = best_hmi_index
+
         best_parameters, coords = self._process_block(
-            start, nx, best_hmi_index, last_best, bounds
+            start, nx, current_hmi_image_index, last_best, bounds
         )
         final_coordinates[start:nx] = coords
 
@@ -909,8 +939,8 @@ if __name__ == "__main__":
     run = True
     use_synthetic_hmi_viz = True
  
-    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
-    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
+    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
     #path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_4_62/IHFDSO"
     # path_to_dkist_data = "/Users/jamescrowley/Documents/?summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
@@ -948,13 +978,14 @@ if __name__ == "__main__":
 
 
     slit_fitted_parameters = None
+    slit_fitted_losses = None
 
     if run:
         initial_guess = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
         # initial_guess = [0,0,0,0,0,0]
         bounds = [(-20, 20), (-20, 20), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
         save_slit_fit_parameters_path = os.path.join(output_folder, "slit_fit_parameters.npy")
-        best_parameters, success, final_coordinates, slit_fitted_parameters = alignment.main(
+        best_parameters, success, final_coordinates, slit_fitted_parameters, slit_fitted_losses = alignment.main(
             initial_guess,
             bounds,
             return_slit_fitted_parameters=True,
@@ -1028,6 +1059,10 @@ if __name__ == "__main__":
         if slit_fitted_parameters is not None:
             repeat_slit_params = slit_fitted_parameters[repeat_start:repeat_end]
 
+        repeat_slit_losses = None
+        if slit_fitted_losses is not None:
+            repeat_slit_losses = slit_fitted_losses[repeat_start:repeat_end]
+
         if repeat_original_coords.shape[0] != repeat_intensities.shape[0] or repeat_final_coordinates.shape[0] != repeat_intensities.shape[0]:
             cfg.log(
                 f"Skipping repeat {repeat_number}/{repeat_count} plot because coordinate and intensity shapes do not match: "
@@ -1035,9 +1070,9 @@ if __name__ == "__main__":
             )
             continue
 
-        fig = plt.figure(figsize=[12, 10])
+        fig = plt.figure(figsize=[12, 13])
 
-        plt.subplot(3, 2, 1)
+        plt.subplot(4, 2, 1)
         if use_repeat_synthetic_hmi_viz:
             plt.title(f'Original DKIST data over middle-frame HMI background (repeat {repeat_number})')
         else:
@@ -1046,7 +1081,7 @@ if __name__ == "__main__":
         plt.pcolormesh(repeat_original_coords[:, :, 0], repeat_original_coords[:, :, 1], repeat_intensities, cmap='plasma', alpha=0.8, shading='auto')
         plt.colorbar()
 
-        plt.subplot(3, 2, 2)
+        plt.subplot(4, 2, 2)
         if use_repeat_synthetic_hmi_viz:
             plt.title(f'Difference between original DKIST and synthetic nearest-frame HMI (repeat {repeat_number})')
         else:
@@ -1055,7 +1090,7 @@ if __name__ == "__main__":
         plt.pcolormesh(repeat_original_coords[:, :, 0], repeat_original_coords[:, :, 1], repeat_intensities - repeat_synthetic_original, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
         plt.colorbar()
 
-        plt.subplot(3, 2, 3)
+        plt.subplot(4, 2, 3)
         if use_repeat_synthetic_hmi_viz:
             plt.title(f'DKIST data after slit-by-slit over synthetic nearest-frame HMI (repeat {repeat_number})')
         else:
@@ -1064,7 +1099,7 @@ if __name__ == "__main__":
         plt.pcolormesh(repeat_final_coordinates[:, :, 0], repeat_final_coordinates[:, :, 1], repeat_intensities, cmap='plasma', alpha=1, shading='auto')
         plt.colorbar()
 
-        plt.subplot(3, 2, 4)
+        plt.subplot(4, 2, 4)
         if use_repeat_synthetic_hmi_viz:
             plt.title(f'Difference between DKIST after slit-by-slit and synthetic nearest-frame HMI (repeat {repeat_number})')
         else:
@@ -1073,7 +1108,7 @@ if __name__ == "__main__":
         plt.pcolormesh(repeat_final_coordinates[:, :, 0], repeat_final_coordinates[:, :, 1], repeat_intensities - repeat_synthetic_final, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
         plt.colorbar()
 
-        ax_params = plt.subplot(3, 1, 3)
+        ax_params = plt.subplot(4, 1, 3)
         if repeat_slit_params is not None:
             slit_indices = np.arange(repeat_slit_params.shape[0])
             parameter_names = [
@@ -1096,6 +1131,21 @@ if __name__ == "__main__":
             ax_params.set_title(f'Evolution of fitted slit-by-slit parameters across raster repeat {repeat_number}')
             ax_params.text(0.5, 0.5, 'No slit-by-slit fitted parameters available', ha='center', va='center')
             ax_params.set_axis_off()
+
+        ax_loss = plt.subplot(4, 1, 4)
+        if repeat_slit_losses is not None:
+            loss_slit_indices = np.arange(repeat_slit_losses.shape[0])
+            ax_loss.plot(loss_slit_indices, repeat_slit_losses, color='tab:red', marker='.', label='Loss')
+
+            ax_loss.set_title(f'Evolution of fitted loss function value across raster repeat {repeat_number}')
+            ax_loss.set_xlabel('Slit index')
+            ax_loss.set_ylabel('Loss (negative correlation)')
+            ax_loss.grid(True, alpha=0.3)
+            ax_loss.legend(loc='best', fontsize=8)
+        else:
+            ax_loss.set_title(f'Evolution of fitted loss function value across raster repeat {repeat_number}')
+            ax_loss.text(0.5, 0.5, 'No slit-by-slit fitted loss values available', ha='center', va='center')
+            ax_loss.set_axis_off()
 
         plt.tight_layout()
 
