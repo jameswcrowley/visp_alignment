@@ -50,6 +50,36 @@ class DataLoader:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
+        # DKIST header / raster-repeat bookkeeping. get_dkist_headers() also sets
+        # self.slits_per_repeat, self.repeat_count, self.selected_raster_repeats,
+        # and self.repeat_ranges as a side effect.
+        self.cfg.log("Loading DKIST headers")
+        self.fixed_keywords, self.changing_keywords, self.fits_files = self.get_dkist_headers()
+
+        # DKIST time span
+        self.start_time, self.end_time = self.get_time(self.changing_keywords)
+        self.cfg.log(f"DKIST time span: {self.start_time} to {self.end_time}")
+
+        # DKIST intensity map
+        self.cfg.log("Building DKIST intensity map")
+        self.intensities = self.get_dkist_wavelengths2()
+
+        if self.intensities.shape[0] != len(self.changing_keywords["DATE-AVG"]):
+            raise ValueError(
+                "DKIST intensity rows do not match the selected raster repeat headers: "
+                f"intensities={self.intensities.shape[0]}, headers={len(self.changing_keywords['DATE-AVG'])}"
+            )
+
+        # HMI reference data
+        self.cfg.log("Loading HMI reference data")
+        self.middle_hmix, self.middle_hmiy, self.middle_hmi_data, self.hmi_files = self.load_hmi(
+            Time(self.start_time), Time(self.end_time)
+        )
+        self.cfg.log("Data loading complete")
+
+        # HMI timestamps
+        self.get_all_hmi_times(self.hmi_files)
+
     def get_time(self, changing_keywords):
         """
         The method uses the path_to_dkist_data from the configuration to locate the DKIST .fits files.
@@ -184,6 +214,8 @@ class DataLoader:
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
         selected_repeat_indices = getattr(self, "selected_raster_repeats", [0])
+        if selected_repeat_indices is None:
+            selected_repeat_indices = [0]
 
         # print(f'Dataset loaded from {asdf_path} with shape {ds[:, :, :, :].data.shape}')
         #TODO: figure out how to optimize getting data from ds
@@ -339,6 +371,8 @@ class DataLoader:
 
         self.cfg.log("Loading HMI reference data")
         self.middle_hmix, self.middle_hmiy, self.middle_hmi_data, self.hmi_files = self.load_hmi(Time(self.start_time), Time(self.end_time))
+
+        self.get_all_hmi_times(self.hmi_files)
         self.cfg.log("Data loading complete")
 
 class Alignment:
@@ -579,8 +613,8 @@ class Alignment:
         Returns:
         --------
         best_parameters (tuple): a tuple of the best parameters found by the optimization.
-        """   
-        self.data_loader.get_all_hmi_times(self.data_loader.hmi_files)
+        """
+        # self.data_loader.hmi_times is already populated by DataLoader's constructor.
 
         # middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
 
@@ -940,13 +974,16 @@ if __name__ == "__main__":
     use_synthetic_hmi_viz = True
  
     # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
-    path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
+    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
     #path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_4_62/IHFDSO"
     # path_to_dkist_data = "/Users/jamescrowley/Documents/?summer_2026/research/pid_3_35/XVNDZY"
-    path_to_sunpy = "~/sunpy/data/"
+    # path_to_sunpy = "~/sunpy/data/"
 
     #path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
     #path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
+
+    path_to_dkist_data = "C:\\Vighnesh Personal\\DKIST Alignment Data\\pid_3_35\\XVNDZY"
+    path_to_sunpy = "C:\\Users\\Admin\\sunpy\\data\\"
 
     output_folder = "saved_plots"
     filename = "my_plot.png"
@@ -964,10 +1001,10 @@ if __name__ == "__main__":
     )
     cfg.log("Run =", run)
 
-    # Load and prepare  
+    # Load and prepare
+    # DataLoader's constructor loads everything (headers, intensities, HMI data/timestamps)
     cfg.log("LOADING DATA")
     loader = DataLoader(cfg)
-    loader.load()
     cfg.log(f"Requested raster repeats: {cfg.raster_repeats}")
 
     # Minimize
