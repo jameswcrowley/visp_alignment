@@ -25,13 +25,15 @@ class Config:
         path_to_sunpy: str,
         wavelength_index = None,
         raster_repeats = None,
-        verbose = False
+        verbose = False,
+        grid_search = False,
     ):
         self.path_to_dkist_data = path_to_dkist_data
         self.path_to_sunpy = path_to_sunpy
         self.wavelength_index = wavelength_index
         self.raster_repeats = raster_repeats
         self.verbose = verbose
+        self.grid_search = grid_search
 
     def log(self, *args, **kwargs):
         if self.verbose:
@@ -124,6 +126,8 @@ class DataLoader:
     def normalize(self, arr):
         arr = np.asarray(arr, dtype=float)
 
+        arr = np.asarray(arr, dtype=float)
+
         # Use robust percentile limits so isolated bad pixels do not dominate scaling.
         finite_mask = np.isfinite(arr)
         if not np.any(finite_mask):
@@ -132,11 +136,8 @@ class DataLoader:
         p_low, p_high = np.nanpercentile(arr[finite_mask], [1.0, 99.0])
         clipped = np.clip(arr, p_low, p_high)
 
-        #using IQR normalization
-        q3, q1 = np.nanpercentile(clipped, [75.0, 25.0])
-
         center = np.nanmedian(clipped)
-        scale = q3 - q1
+        scale = p_high - p_low
 
         # Avoid divide-by-zero for near-constant arrays.
         if not np.isfinite(scale) or scale <= 0:
@@ -539,7 +540,136 @@ class Alignment:
 
         return HMI_interpolated_to_coords
 
+    def grid_search(self, coords, intensities, relevant_hmix, relevant_hmiy, relevant_hmi_data, dx, dy):
+        """
+        This function interpolates the DKIST data onto the relevant HMI rectilinear grid.
+        It then slides the interpolated & rectilinearly gridded DKIST data across the relevant HMI data and calculated the cross-correlation at each position. 
+        It returns the max cross-correlation value and the corresponding CRVAL1 and CRVAL3 shifts that produced the max cross-correlation value.
+        It vectorizes the sliding operation to avoid for loops and speed up the calculation. 
 
+        Parameters:
+        -----------
+        coords (numpy.ndarray): a 3D array of the coordinates of the DKIST data, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
+        intensities (numpy.ndarray): a 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile, with shape (nx, ny), where nx is the number of slits and ny is the number of pixels along the slit.
+        relevant_hmix (numpy.ndarray): the x coordinates of the relevant HMI data.
+        relevant_hmiy (numpy.ndarray): the y coordinates of the relevant HMI data.
+        dx (float): the maximum CRVAL3 shift to search over, in arcseconds.
+        dy (float): the maximum CRVAL1 shift to search over, in arcseconds.
+
+        Returns:
+        --------
+        max_correlation (float): the maximum cross-correlation value.
+        best_dx (float): the x shift that produced the maximum cross-correlation.
+        best_dy (float): the y shift that produced the maximum cross-correlation.
+        """
+
+
+        points = coords.reshape(-1, 2)
+        values = intensities.reshape(-1)
+
+        # Keep only finite samples for triangulation/interpolation
+        valid = np.isfinite(points).all(axis=1) & np.isfinite(values)
+        points_valid = points[valid]
+        values_valid = values[valid]
+
+        hmi_x_1d = relevant_hmix[:min(len(relevant_hmix), len(relevant_hmiy))]
+        hmi_y_1d = relevant_hmiy[:min(len(relevant_hmix), len(relevant_hmiy))]
+
+        hmi_x_2d, hmi_y_2d = np.meshgrid(hmi_x_1d, hmi_y_1d)
+
+        interpolated_dkist = interp.griddata(
+            points=points_valid,
+            values=values_valid,
+            xi=(hmi_x_2d, hmi_y_2d),
+            method="linear",
+            fill_value=np.nan,
+        )
+
+        crval1_shifts = np.linspace(-dy, dy, int(2*dy/0.5) + 1)
+        crval3_shifts = np.linspace(-dx, dx, int(2*dx/0.5) + 1)
+
+        hmi_on_grid = relevant_hmi_data[:len(hmi_y_1d), :len(hmi_x_1d)]
+        dkist_on_grid = interpolated_dkist
+
+        if dkist_on_grid.shape != hmi_on_grid.shape:
+            raise ValueError(f"Shape mismatch: DKIST {dkist_on_grid.shape} vs HMI {hmi_on_grid.shape}")
+
+        # Convert arcsec shifts to integer pixel shifts so no interpolation is done.
+        # Positive CRVAL3 shift -> +x (columns). Positive CRVAL1 shift -> +y (rows).
+        dx_arcsec = float(np.nanmedian(np.diff(hmi_x_1d)))
+        dy_arcsec = float(np.nanmedian(np.diff(hmi_y_1d)))
+
+        x_pix_shifts = np.rint(np.asarray(crval3_shifts) / dx_arcsec).astype(int)  # columns
+        y_pix_shifts = np.rint(np.asarray(crval1_shifts) / dy_arcsec).astype(int)  # rows
+
+        ny, nx = dkist_on_grid.shape
+        n_y = y_pix_shifts.size
+        n_x = x_pix_shifts.size
+
+        # Output correlation grid: rows correspond to crval1_shifts, cols to crval3_shifts
+        correlations = np.full((n_y, n_x), np.nan, dtype=np.float64)
+
+        # Precompute base row/col index grids once.
+        row_base = np.arange(ny)[None, None, :, None]   # (1,1,ny,1)
+        col_base = np.arange(nx)[None, None, None, :]   # (1,1,1,nx)
+
+        # HMI broadcast view and finite mask.
+        hmi4 = hmi_on_grid[None, None, :, :]            # (1,1,ny,nx)
+        hmi_finite = np.isfinite(hmi4)
+
+        # Chunk over y-shifts to keep memory reasonable.
+        # Set chunk = n_y for fully vectorized single-pass if memory allows.
+        chunk = min(16, n_y)
+
+        for i0 in range(0, n_y, chunk):
+            i1 = min(i0 + chunk, n_y)
+
+            sy = y_pix_shifts[i0:i1][:, None, None, None]  # (cy,1,1,1)
+            sx = x_pix_shifts[None, :, None, None]         # (1,nxshift,1,1)
+
+            # Shift by index remapping (no interpolation):
+            # shifted[r,c] = original[r - sy, c - sx]
+            src_r = row_base - sy
+            src_c = col_base - sx
+
+            valid = (src_r >= 0) & (src_r < ny) & (src_c >= 0) & (src_c < nx)
+
+            src_r_clip = np.clip(src_r, 0, ny - 1)
+            src_c_clip = np.clip(src_c, 0, nx - 1)
+
+            dk_shifted = dkist_on_grid[src_r_clip, src_c_clip]    # (cy,nxshift,ny,nx)
+            valid &= np.isfinite(dk_shifted) & hmi_finite
+
+            # Vectorized Pearson correlation with NaN-aware masking.
+            x = np.where(valid, dk_shifted, 0.0)
+            y = np.where(valid, hmi4, 0.0)
+
+            n = valid.sum(axis=(-2, -1)).astype(np.float64)
+            sum_x = x.sum(axis=(-2, -1))
+            sum_y = y.sum(axis=(-2, -1))
+            sum_xx = (x * x).sum(axis=(-2, -1))
+            sum_yy = (y * y).sum(axis=(-2, -1))
+            sum_xy = (x * y).sum(axis=(-2, -1))
+
+            # Pearson numerator/denominator in sum form.
+            cov_num = sum_xy - (sum_x * sum_y) / n
+            var_x = sum_xx - (sum_x * sum_x) / n
+            var_y = sum_yy - (sum_y * sum_y) / n
+            denom = np.sqrt(var_x * var_y)
+
+            corr = np.full_like(cov_num, np.nan, dtype=np.float64)
+            good = (n > 2) & (denom > 0)
+            corr[good] = cov_num[good] / denom[good]
+
+            correlations[i0:i1, :] = corr
+
+        # Optional: locate best shift in your requested grids
+        best_idx = np.unravel_index(np.nanargmax(correlations), correlations.shape)
+        best_crval1 = crval1_shifts[best_idx[0]]
+        best_crval3 = crval3_shifts[best_idx[1]]
+
+        return correlations[best_idx], best_crval1, best_crval3
+            
     def loss_function(
         self,
         parameters,
@@ -597,7 +727,7 @@ class Alignment:
         return loss
 
     
-    def main(
+    def alignment_main(
         self,
         initial_guess,
         bounds,
@@ -621,10 +751,26 @@ class Alignment:
         middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
         middle_hmi_idx = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_times)
         hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, middle_hmi_idx)
-        best_parameters, result, loss_value = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
 
-        # best_parameters = initial_guess
-        # result = True
+        if not self.cfg.grid_search:
+            best_parameters, result, loss_value = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
+        else:
+            initial_coordinates = self.construct_dkist_coords(self.data_loader.fixed_keywords, self.data_loader.changing_keywords, initial_guess)
+            relevant_hmix, relevant_hmiy, relevant_hmi_data = self.identify_relevant_hmi_data(initial_coordinates, hmix, hmiy, hmi_data)
+            self.cfg.log("Performing grid search for initial alignment")
+
+            max_correlation, best_crval1_offset, best_crval3_offset = self.grid_search(initial_coordinates, self.data_loader.intensities, relevant_hmix, relevant_hmiy, relevant_hmi_data, dx=30, dy=30)
+            result = True
+
+            best_crval1 = initial_guess[0] + best_crval1_offset
+            best_crval3 = initial_guess[1] + best_crval3_offset
+
+            self.cfg.log(50 * '-')
+            self.cfg.log("Best CRVAL1 shift:", best_crval1, "arcsec")
+            self.cfg.log("Best CRVAL3 shift:", best_crval3, "arcsec")
+            self.cfg.log(50 * '-')
+
+            best_parameters = (best_crval1, best_crval3, initial_guess[2], initial_guess[3], initial_guess[4], initial_guess[5])
 
         crval_delta = 3
         pc_delta = 0
@@ -972,7 +1118,7 @@ if __name__ == "__main__":
     run = True
     use_synthetic_hmi_viz = True
  
-    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_31/KRBVTD"
+    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
     
     output_folder = "saved_plots"
@@ -987,7 +1133,8 @@ if __name__ == "__main__":
     path_to_sunpy=path_to_sunpy, 
     wavelength_index=30, 
     raster_repeats=0,
-    verbose=True
+    verbose=True,
+    grid_search=True # Try setting this option to True if your dataset is QS or doens't have a clear feature, like a sunspot. 
     )
     cfg.log("Run =", run)
 
@@ -1012,7 +1159,7 @@ if __name__ == "__main__":
         # initial_guess = [0,0,0,0,0,0]
         bounds = [(-20, 20), (-20, 20), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
         save_slit_fit_parameters_path = os.path.join(output_folder, "slit_fit_parameters.npy")
-        best_parameters, success, final_coordinates, slit_fitted_parameters, slit_fitted_losses = alignment.main(
+        best_parameters, success, final_coordinates, slit_fitted_parameters, slit_fitted_losses = alignment.alignment_main(
             initial_guess,
             bounds,
             return_slit_fitted_parameters=True,
@@ -1097,40 +1244,37 @@ if __name__ == "__main__":
             )
             continue
 
-        fig = plt.figure(figsize=[12, 13])
+        fig = plt.figure(figsize=[12, 10])
 
         plt.subplot(4, 2, 1)
-        if use_repeat_synthetic_hmi_viz:
-            plt.title(f'Original DKIST data over middle-frame HMI background (repeat {repeat_number})')
-        else:
-            plt.title(f'Original DKIST data overlayed over original HMI data (repeat {repeat_number})')
+        plt.title(f'DKIST data over middle HMI \n(repeat {repeat_number})')
         plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
         plt.pcolormesh(repeat_original_coords[:, :, 0], repeat_original_coords[:, :, 1], repeat_intensities, cmap='plasma', alpha=0.8, shading='auto')
         plt.colorbar()
 
         plt.subplot(4, 2, 2)
         if use_repeat_synthetic_hmi_viz:
-            plt.title(f'Difference between original DKIST and synthetic nearest-frame HMI (repeat {repeat_number})')
+            plt.title(f'Diff: DKIST and synthetic HMI \n(repeat {repeat_number})')
         else:
-            plt.title(f'Difference between original DKIST and HMI data (repeat {repeat_number})')
+            plt.title(f'Diff: DKIST and HMI \n(repeat {repeat_number})')
         plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
         plt.pcolormesh(repeat_original_coords[:, :, 0], repeat_original_coords[:, :, 1], repeat_intensities - repeat_synthetic_original, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
         plt.colorbar()
 
         plt.subplot(4, 2, 3)
         if use_repeat_synthetic_hmi_viz:
-            plt.title(f'DKIST data after slit-by-slit over synthetic nearest-frame HMI (repeat {repeat_number})')
+            plt.title(f'DKIST slit-by-slit aligned over synthetic HMI \n(repeat {repeat_number})')
         else:
-            plt.title(f'DKIST data after slit-by-slit (repeat {repeat_number})')
+            plt.title(f'DKIST slit-by-slit aligned \n(repeat {repeat_number})')
         plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
         plt.pcolormesh(repeat_final_coordinates[:, :, 0], repeat_final_coordinates[:, :, 1], repeat_intensities, cmap='plasma', alpha=1, shading='auto')
         plt.colorbar()
 
         plt.subplot(4, 2, 4)
         if use_repeat_synthetic_hmi_viz:
-            plt.title(f'Difference between DKIST after slit-by-slit and synthetic nearest-frame HMI (repeat {repeat_number})')
+            plt.title(f'Diff: DKIST after slit-by-slit and synthetic HMI \n(repeat {repeat_number})')
         else:
-            plt.title(f'Difference between DKIST after slit-by-slit and HMI data (repeat {repeat_number})')
+            plt.title(f'Diff: DKIST after slit-by-slit and HMI \n(repeat {repeat_number})')
         plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
         plt.pcolormesh(repeat_final_coordinates[:, :, 0], repeat_final_coordinates[:, :, 1], repeat_intensities - repeat_synthetic_final, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
         plt.colorbar()
