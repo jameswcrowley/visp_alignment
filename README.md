@@ -1,19 +1,20 @@
 # DKIST visp-alignment
 
 ## Concept
-DKIST data is heavily misaligned, sometimes with errors upwards of 20 arcseconds. To tackle this issue, DKIST visp-alignment uses HMI solar telescope as a reference point and cross-correlates the data from both the telescopes to get the minimum amount of loss. 
+DKIST's ViSP instrument offers some of the highest spatial resolution spectropolarimetric observations, but sometimes comes with pointing errors up to 30 arcseconds. To align ViSP data, we take advantage of the stable coordinates and data from the Helioseismic and Magnetic Imager (HMI) on the Solar Dynamics Observatory (SDO) to correct for these pointing errors. The alignment is done by interpolating HMI data to the scale of DKIST data and using a loss function to find the best shift in DKIST's spatial coordinates to align with HMI data.
 
-## Methodology 
-1. Loading in the DKIST data and using `fido.search()` to download all the HMI data that falls within the start and endtime of the DKIST data (~30 minutes)
-2. Constructing DKIST's spatial coordinates using the header keywords `CRVAL1/3`, `CRPIX1/3`, `CDELT1/3`, and `PCi_j`. 
-3. Interpolating the HMI data and scale of the DKIST data and cropping it within the range of 20 arcseconds from DKIST. 
-4. Using a loss function with `CRVAL1/3` and `PCi_j` as parameters to shift the DKIST coordinates to align best with interpolated HMI data. 
-5. Reconstructing the DKIST coordinates with the calculated shifts. 
+## Overview of the alignment process 
+1. Load in the DKIST data and use `fido.search()` to download all the HMI data that falls +/- 1 min cotemporal to the DKIST data.
+2. Construct DKIST's spatial coordinates using the header keywords `CRVAL1/3`, `CRPIX1/3`, `CDELT1/3`, and `PCi_j`. 
+3. Interpolate the cotemporal HMI data to the scale of the DKIST data. 
+4. Calculate the loss between DKIST and interpolated HMI data to optimize for the best `CRVAL1/3` and `PCi_j`.
+5. Reconstruct the DKIST coordinates with the calculated shifts. 
 
 ## Running Requirements
 Here is the list of all the tools/python libraries required to run `visp_alignment.py`
 
-```from pathlib import Path
+```
+from pathlib import Path
 import numpy as np
 import astropy.io.fits as fits
 from astropy.time import Time, TimeDelta

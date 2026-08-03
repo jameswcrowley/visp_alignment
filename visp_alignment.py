@@ -972,7 +972,7 @@ if __name__ == "__main__":
     run = True
     use_synthetic_hmi_viz = True
  
-    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_31/KRBVTD"
+    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     path_to_sunpy = "~/sunpy/data/"
     
     output_folder = "saved_plots"
