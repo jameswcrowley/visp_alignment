@@ -618,17 +618,13 @@ class Alignment:
         best_parameters (tuple): a tuple of the best parameters found by the optimization.
         """
         # self.data_loader.hmi_times is already populated by DataLoader's constructor.
+        middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
+        middle_hmi_idx = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_times)
+        hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, middle_hmi_idx)
+        best_parameters, result, loss_value = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
 
-        # middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
-
-        # middle_hmi_idx = self.find_nearest_hmi(middle_image_time, self.data_loader.hmi_times)
-
-        # hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, middle_hmi_idx)
-
-        # best_parameters, result = self.align(initial_guess, bounds, self.data_loader.changing_keywords, self.data_loader.intensities, hmix, hmiy, hmi_data)
-
-        best_parameters = initial_guess
-        result = True
+        # best_parameters = initial_guess
+        # result = True
 
         crval_delta = 3
         pc_delta = 0
@@ -976,18 +972,9 @@ if __name__ == "__main__":
     run = True
     use_synthetic_hmi_viz = True
  
-    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
-    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
-    #path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_4_62/IHFDSO"
-    # path_to_dkist_data = "/Users/jamescrowley/Documents/?summer_2026/research/pid_3_35/XVNDZY"
-    # path_to_sunpy = "~/sunpy/data/"
-
-    path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
-    path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
-
-    # path_to_dkist_data = "C:\\Vighnesh Personal\\DKIST Alignment Data\\pid_3_35\\XVNDZY"
-    # path_to_sunpy = "C:\\Users\\Admin\\sunpy\\data\\"
-
+    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_31/KRBVTD"
+    path_to_sunpy = "~/sunpy/data/"
+    
     output_folder = "saved_plots"
     filename = "my_plot.png"
 
@@ -1014,7 +1001,7 @@ if __name__ == "__main__":
     cfg.log("ALIGNING")
     
     alignment = Alignment(cfg, loader)
-    original_dkist_coords = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, [0, 0, 0, 0, 0, 0])
+    original_dkist_coords = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, [0, 3, 0, 0, 0, 0])
 
 
     slit_fitted_parameters = None
