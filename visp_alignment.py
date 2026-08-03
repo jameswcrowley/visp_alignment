@@ -1097,7 +1097,7 @@ if __name__ == "__main__":
             )
             continue
 
-        fig = plt.figure(figsize=[12, 13])
+        fig = plt.figure(figsize=[8, 10])
 
         plt.subplot(4, 2, 1)
         if use_repeat_synthetic_hmi_viz:
