@@ -132,8 +132,11 @@ class DataLoader:
         p_low, p_high = np.nanpercentile(arr[finite_mask], [1.0, 99.0])
         clipped = np.clip(arr, p_low, p_high)
 
+        #using IQR normalization
+        q3, q1 = np.nanpercentile(clipped, [75.0, 25.0])
+
         center = np.nanmedian(clipped)
-        scale = p_high - p_low
+        scale = q3 - q1
 
         # Avoid divide-by-zero for near-constant arrays.
         if not np.isfinite(scale) or scale <= 0:
@@ -969,19 +972,9 @@ if __name__ == "__main__":
     run = True
     use_synthetic_hmi_viz = True
  
-    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_2_31/JPUAIO"
-    # path_to_dkist_data = "/Users/joshua/projects/nso/dkist-data/pid_3_35/XVNDZY"
-    #path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_4_62/IHFDSO"
-    #path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_31/KRBVTD"
     path_to_sunpy = "~/sunpy/data/"
-
-    #path_to_dkist_data = "C:\\Projects\\DkistData\\pid_3_31\\KRBVTD\\"
-    #path_to_sunpy = "C:\\Users\\owner\\sunpy\\data\\"
-
-    #path_to_dkist_data = "C:\\Vighnesh Personal\\DKIST Alignment Data\\pid_3_35\\XVNDZY"
-    #path_to_sunpy = "C:\\Users\\Admin\\sunpy\\data\\"
-
+    
     output_folder = "saved_plots"
     filename = "my_plot.png"
 
