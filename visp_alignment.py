@@ -1113,19 +1113,174 @@ class Alignment:
 
         return final_coordinates
 
+
+class Plot:
+    "Class for plotting all the data and results from the alignment process."
+    def __init__(self, cfg:Config, loader: DataLoader, alignment: Alignment):
+        self.cfg = cfg
+        self.loader = loader
+        self.alignment = alignment
+
+    def _prepare_visualization_data(self, original_coords, final_coords, best_params, use_syntheic_hmi_viz):
+        "Gets all the data required for visualization"
+        coords_new = self.alignment.construct_dkist_coords(self.loader.fixed_keywords, self.loader.changing_keywords, best_params)
+
+        middle_image_time = self.loader.hmi_times[len(self.loader.hmi_times)//2]
+        best_id = self.alignment.find_nearest_hmi(middle_image_time, self.loader.hmi_times)
+        hmix, hmiy, hmi_data = self.alignment.get_hmi(self.loader.hmi_files, best_id)
+        relevant_hmix, relevant_hmiy, relevant_hmi_data = self.alignment.identify_relevant_hmi_data(coords_new, hmix, hmiy, hmi_data)
+
+        synthetic_original, synthetic_final = None, None
+
+        if use_syntheic_hmi_viz:
+            synthetic_original, orig_indicies = self.alignment.build_synthetic_hmi_on_coords(original_coords, delta = 20)
+            self.cfg.log(f"Built syntheic HMI for original coordinates using {len(np.unique(orig_indicies))} unique HMI frames")
+            synthetic_final, final_indicies = self.alignment.build_synthetic_hmi_on_coords(final_coords, delta = 20)
+            self.cfg.log(f"Built syntheic HMI for final coordinates using {len(np.unique(final_indicies))} unique HMI frames")
+            print("set synthetic variables")
+        else:
+            interpolator = self.alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
+            synthetic_original = self.alignment.interpolate_hmi_to_coords(interpolator, original_coords)
+            synthetic_final = self.alignment.interpolate_hmi_to_coords(interpolator, final_coords)
+            print("set synthetic variables")
+            self.cfg.log("Using legacy single-frame HMI visualization mode")
+
+        print("Synthetic original:", synthetic_original)
+        print("Synthetic final:", synthetic_final)
+        return (relevant_hmix, relevant_hmiy, relevant_hmi_data), synthetic_original, synthetic_final
+
+    def plot_results(
+            self,
+            original_coords,
+            final_coords,
+            best_params,
+            save_path: str,
+            slit_fitted_params = None,
+            slit_fitted_losses = None,
+            use_synthetic_hmi_viz = True,
+            show = True
+    ):
+        "Generates the 4x2 final plot for each raster repeat, saves it, and graphs the parameter and loss evolutions across slits"
+        hmi_data, synthetic_original, synthetic_final = self._prepare_visualization_data(original_coords, final_coords, best_params, use_synthetic_hmi_viz)  
+        relevant_hmix, relevant_hmiy, relevant_hmi_data = hmi_data
+
+        repeat_ranges = getattr(self.loader, "repeat_ranges", [(0, final_coords.shape[0])]) #gets raster-repeat boundaries from "repeat ranges" attribute if it exists, otherwise assume a single raster repeat. Is a list of tuples
+        repeat_count = len(repeat_ranges)
+        save_path = Path(save_path)
+
+        for repeat_number, (repeat_start, repeat_end) in enumerate(repeat_ranges, start = 1):
+            rep_orig_coords = original_coords[repeat_start:repeat_end]
+            rep_final_coords = final_coords[repeat_start:repeat_end]
+            rep_intensities = self.loader.intensities[repeat_start:repeat_end]
+            rep_synth_orig = synthetic_original[repeat_start:repeat_end]
+            rep_synth_final = synthetic_final[repeat_start:repeat_end]
+
+            rep_slit_params = None
+            if slit_fitted_params is not None:
+                rep_slit_params = slit_fitted_params[repeat_start:repeat_end]
+
+            rep_slit_losses = None
+            if slit_fitted_losses is not None:
+                rep_slit_losses = slit_fitted_losses[repeat_start:repeat_end]
+
+            if rep_orig_coords.shape[0] != rep_intensities.shape[0] or rep_final_coords.shape[0] != rep_intensities.shape[0]:
+                self.cfg.log(
+                    f"Skipping repeat {repeat_number}/{repeat_count} plot due to shape mismatch: "
+                    f"original={rep_orig_coords.shape}, final={rep_final_coords.shape}, intensities={rep_intensities.shape}"
+                )
+                continue
+
+            fig = plt.figure(figsize=[12, 10])
+
+            # Panel 1: Original DKIST over background HMI
+            plt.subplot(4, 2, 1)
+            plt.title(f"DKIST data over middle HMI \n(repeat {repeat_number})")
+            plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap="grey", origin="lower")
+            plt.pcolormesh(rep_orig_coords[:, :, 0], rep_orig_coords[:, :, 1], rep_intensities, cmap="plasma", alpha=0.8, shading="auto")
+            plt.colorbar()
+
+            # Panel 2: Difference before alignment
+            plt.subplot(4, 2, 2)
+            plt.title(f"Diff: DKIST and {'synthetic ' if use_synthetic_hmi_viz else ''}HMI \n(repeat {repeat_number})")
+            plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap="grey", origin="lower")
+            plt.pcolormesh(rep_orig_coords[:, :, 0], rep_orig_coords[:, :, 1], rep_intensities - rep_synth_orig, cmap="bwr", alpha=1, vmin=-0.5, vmax=0.5, shading="auto")
+            plt.colorbar()
+
+            # Panel 3: Final aligned DKIST over HMI
+            plt.subplot(4, 2, 3)
+            plt.title(f"DKIST slit-by-slit aligned{' over synthetic HMI' if use_synthetic_hmi_viz else ''} \n(repeat {repeat_number})")
+            plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap="grey", origin="lower")
+            plt.pcolormesh(rep_final_coords[:, :, 0], rep_final_coords[:, :, 1], rep_intensities, cmap="plasma", alpha=1, shading="auto")
+            plt.colorbar()
+
+            # Panel 4: Difference after alignment
+            plt.subplot(4, 2, 4)
+            plt.title(f"Diff: DKIST after slit-by-slit and {'synthetic ' if use_synthetic_hmi_viz else ''}HMI \n(repeat {repeat_number})")
+            plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap="grey", origin="lower")
+            plt.pcolormesh(rep_final_coords[:, :, 0], rep_final_coords[:, :, 1], rep_intensities - rep_synth_final, cmap="bwr", alpha=1, vmin=-0.5, vmax=0.5, shading="auto")
+            plt.colorbar()
+
+            #Graph 5: Parameter evolution across slits
+            ax_params = plt.subplot(4, 1, 3)
+            if rep_slit_params is not None:
+                slit_indices = np.arange(rep_slit_params.shape[0])
+                param_names = [
+                    "CRVAL1 shift", "CRVAL3 shift",
+                    "PC1_1 shift", "PC3_1 shift",
+                    "PC1_3 shift", "PC3_3 shift",
+                ]
+                for p_id, p_name in enumerate(param_names):
+                    ax_params.plot(slit_indices, rep_slit_params[:, p_id], label=p_name)
+
+                ax_params.set_title(f"Slit-by-slit parameter evolution across raster repeat {repeat_number})")
+                ax_params.set_xlabel("Slit Index")
+                ax_params.set_ylabel("Parameter Value")
+                ax_params.legend(loc = "best", fontsize = 8, ncol = 2)
+                ax_params.grid(True, alpha = 0.3)
+            else:
+                ax_params.set_title(f"Evolution of fitted slit-by-slit parameters across raster repeat {repeat_number}")
+                ax_params.text(0.5, 0.5, "No slit-by-slit fitted parameters available", ha="center", va="center")
+                ax_params.set_axis_off()
+
+            #Graph 6: Loss evolution across slits
+            ax_loss = plt.subplot(4, 1, 4)
+            if rep_slit_losses is not None:
+                loss_indices = np.arange(rep_slit_losses.shape[0])
+                ax_loss.plot(loss_indices, rep_slit_losses, label="Loss", color="red", marker = ".")
+                ax_loss.set_title(f"Slit-by-slit loss evolution across raster repeat {repeat_number})")
+                ax_loss.set_xlabel("Slit Index")
+                ax_loss.set_ylabel("Loss (Negative Correlation)")
+                ax_loss.legend()
+                ax_loss.grid(True, alpha = 0.3)
+            else:
+                ax_loss.set_title(f"Evolution of fitted slit-by-slit losses across raster repeat {repeat_number}")
+                ax_loss.text(0.5, 0.5, "No slit-by-slit fitted losses available", ha="center", va="center")
+                ax_loss.set_axis_off()
+
+            plt.tight_layout()
+
+            out_file = save_path if repeat_count == 1 else save_path.with_name(f"{save_path.stem}_repeat{repeat_number}{save_path.suffix}")
+            fig.savefig(out_file, dpi=300, bbox_inches = "tight")
+            self.cfg.log(f"Plot saved to {out_file}")
+        if show:
+            plt.show()
+
+
 if __name__ == "__main__":
 
     run = True
     use_synthetic_hmi_viz = True
  
-    path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
-    path_to_sunpy = "~/sunpy/data/"
+    # path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
+    # path_to_sunpy = "~/sunpy/data/"
+
+    path_to_dkist_data = "C:\\Projects\\Dkist_data\\KRBVTD"
+    path_to_sunpy = "C:\\Projects\\HMI_data"
     
     output_folder = "saved_plots"
     filename = "my_plot.png"
 
     os.makedirs(output_folder, exist_ok=True)
-    
     save_path = os.path.join(output_folder, filename)
     
     cfg = Config(
@@ -1138,20 +1293,17 @@ if __name__ == "__main__":
     )
     cfg.log("Run =", run)
 
-    # Load and prepare
-    # DataLoader's constructor loads everything (headers, intensities, HMI data/timestamps)
+    # 1 Load Data
     cfg.log("LOADING DATA")
     loader = DataLoader(cfg)
     cfg.log(f"Requested raster repeats: {cfg.raster_repeats}")
 
-    # Minimize
+    # 1 Setup coords and Alignment
     cfg.log("ALIGNING")
-    
     alignment = Alignment(cfg, loader)
     original_dkist_coords = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, [0, 3, 0, 0, 0, 0])
 
-
-    slit_fitted_parameters = None
+    slit_fitted_params = None
     slit_fitted_losses = None
 
     if run:
@@ -1159,6 +1311,7 @@ if __name__ == "__main__":
         # initial_guess = [0,0,0,0,0,0]
         bounds = [(-20, 20), (-20, 20), (-1, 1), (-1, 1), (-1, 1), (-1, 1)]
         save_slit_fit_parameters_path = os.path.join(output_folder, "slit_fit_parameters.npy")
+
         best_parameters, success, final_coordinates, slit_fitted_parameters, slit_fitted_losses = alignment.alignment_main(
             initial_guess,
             bounds,
@@ -1173,159 +1326,17 @@ if __name__ == "__main__":
         best_parameters = [-1.54496818e+00, 1.24362323e+01, -4.59627643e-03, -6.24326444e-03, 2.50216084e-02, -3.68731789e-03]
 
 
-    # assemble final coordinates
-
-    coords_new = alignment.construct_dkist_coords(loader.fixed_keywords, loader.changing_keywords, best_parameters)
-
-    if not run:
-        final_coordinates = coords_new
-
-    # Always build a middle-frame HMI background for the left two panels.
-    middle_image_time = loader.hmi_times[len(loader.hmi_times)//2]
-    best_idx = alignment.find_nearest_hmi(middle_image_time, loader.hmi_times)
-    hmix, hmiy, hmi_data = alignment.get_hmi(loader.hmi_files, best_idx)
-    relevant_hmix, relevant_hmiy, relevant_hmi_data = alignment.identify_relevant_hmi_data(
-        coords_new, hmix, hmiy, hmi_data
+    # 3 Generate Plots
+    plotter = Plot(cfg, loader, alignment)
+    plotter.plot_results(
+        original_coords=original_dkist_coords,
+        final_coords=final_coordinates,
+        best_params=best_parameters,
+        save_path=save_path,
+        slit_fitted_params=slit_fitted_parameters,
+        slit_fitted_losses=slit_fitted_losses,
+        use_synthetic_hmi_viz=use_synthetic_hmi_viz,
+        show=True,
     )
 
-    if use_synthetic_hmi_viz:
-        synthetic_hmi_on_original_coords, synthetic_hmi_indices_original = alignment.build_synthetic_hmi_on_coords(
-            original_dkist_coords,
-            delta=20,
-        )
-
-        cfg.log(
-            f"Built synthetic HMI on original coordinates using {len(np.unique(synthetic_hmi_indices_original))} HMI frames"
-        )
-
-        synthetic_hmi_on_final_coords, synthetic_hmi_indices = alignment.build_synthetic_hmi_on_coords(
-            final_coordinates,
-            delta=20,
-        )
-
-        cfg.log(
-            f"Built synthetic HMI on final coordinates using {len(np.unique(synthetic_hmi_indices))} HMI frames"
-        )
-    else:
-        interpolator = alignment.construct_interpolator(relevant_hmix, relevant_hmiy, relevant_hmi_data)
-
-        synthetic_hmi_on_original_coords = alignment.interpolate_hmi_to_coords(
-            interpolator, original_dkist_coords
-        )
-        synthetic_hmi_on_final_coords = alignment.interpolate_hmi_to_coords(
-            interpolator, final_coordinates
-        )
-
-        cfg.log("Using legacy single-frame HMI visualization mode")
-
-    repeat_ranges = getattr(loader, "repeat_ranges", [(0, final_coordinates.shape[0])])
-    repeat_count = len(repeat_ranges)
-    save_path = Path(save_path)
-    use_repeat_synthetic_hmi_viz = use_synthetic_hmi_viz
-
-    for repeat_number, (repeat_start, repeat_end) in enumerate(repeat_ranges, start=1):
-        repeat_original_coords = original_dkist_coords[repeat_start:repeat_end]
-        repeat_final_coordinates = final_coordinates[repeat_start:repeat_end]
-        repeat_intensities = loader.intensities[repeat_start:repeat_end]
-        repeat_synthetic_original = synthetic_hmi_on_original_coords[repeat_start:repeat_end]
-        repeat_synthetic_final = synthetic_hmi_on_final_coords[repeat_start:repeat_end]
-        repeat_slit_params = None
-        if slit_fitted_parameters is not None:
-            repeat_slit_params = slit_fitted_parameters[repeat_start:repeat_end]
-
-        repeat_slit_losses = None
-        if slit_fitted_losses is not None:
-            repeat_slit_losses = slit_fitted_losses[repeat_start:repeat_end]
-
-        if repeat_original_coords.shape[0] != repeat_intensities.shape[0] or repeat_final_coordinates.shape[0] != repeat_intensities.shape[0]:
-            cfg.log(
-                f"Skipping repeat {repeat_number}/{repeat_count} plot because coordinate and intensity shapes do not match: "
-                f"original={repeat_original_coords.shape}, final={repeat_final_coordinates.shape}, intensities={repeat_intensities.shape}"
-            )
-            continue
-
-        fig = plt.figure(figsize=[12, 10])
-
-        plt.subplot(4, 2, 1)
-        plt.title(f'DKIST data over middle HMI \n(repeat {repeat_number})')
-        plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
-        plt.pcolormesh(repeat_original_coords[:, :, 0], repeat_original_coords[:, :, 1], repeat_intensities, cmap='plasma', alpha=0.8, shading='auto')
-        plt.colorbar()
-
-        plt.subplot(4, 2, 2)
-        if use_repeat_synthetic_hmi_viz:
-            plt.title(f'Diff: DKIST and synthetic HMI \n(repeat {repeat_number})')
-        else:
-            plt.title(f'Diff: DKIST and HMI \n(repeat {repeat_number})')
-        plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
-        plt.pcolormesh(repeat_original_coords[:, :, 0], repeat_original_coords[:, :, 1], repeat_intensities - repeat_synthetic_original, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
-        plt.colorbar()
-
-        plt.subplot(4, 2, 3)
-        if use_repeat_synthetic_hmi_viz:
-            plt.title(f'DKIST slit-by-slit aligned over synthetic HMI \n(repeat {repeat_number})')
-        else:
-            plt.title(f'DKIST slit-by-slit aligned \n(repeat {repeat_number})')
-        plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
-        plt.pcolormesh(repeat_final_coordinates[:, :, 0], repeat_final_coordinates[:, :, 1], repeat_intensities, cmap='plasma', alpha=1, shading='auto')
-        plt.colorbar()
-
-        plt.subplot(4, 2, 4)
-        if use_repeat_synthetic_hmi_viz:
-            plt.title(f'Diff: DKIST after slit-by-slit and synthetic HMI \n(repeat {repeat_number})')
-        else:
-            plt.title(f'Diff: DKIST after slit-by-slit and HMI \n(repeat {repeat_number})')
-        plt.imshow(relevant_hmi_data, extent=[relevant_hmix[0], relevant_hmix[-1], relevant_hmiy[0], relevant_hmiy[-1]], cmap='grey', origin='lower')
-        plt.pcolormesh(repeat_final_coordinates[:, :, 0], repeat_final_coordinates[:, :, 1], repeat_intensities - repeat_synthetic_final, cmap='bwr', alpha=1, vmin=-0.5, vmax=0.5, shading='auto')
-        plt.colorbar()
-
-        ax_params = plt.subplot(4, 1, 3)
-        if repeat_slit_params is not None:
-            slit_indices = np.arange(repeat_slit_params.shape[0])
-            parameter_names = [
-                'CRVAL1 shift',
-                'CRVAL3 shift',
-                'PC1_1 shift',
-                'PC3_1 shift',
-                'PC1_3 shift',
-                'PC3_3 shift',
-            ]
-            for p_idx, p_name in enumerate(parameter_names):
-                ax_params.plot(slit_indices, repeat_slit_params[:, p_idx], label=p_name)
-
-            ax_params.set_title(f'Evolution of fitted slit-by-slit parameters across raster repeat {repeat_number}')
-            ax_params.set_xlabel('Slit index')
-            ax_params.set_ylabel('Parameter value')
-            ax_params.grid(True, alpha=0.3)
-            ax_params.legend(loc='best', fontsize=8, ncol=2)
-        else:
-            ax_params.set_title(f'Evolution of fitted slit-by-slit parameters across raster repeat {repeat_number}')
-            ax_params.text(0.5, 0.5, 'No slit-by-slit fitted parameters available', ha='center', va='center')
-            ax_params.set_axis_off()
-
-        ax_loss = plt.subplot(4, 1, 4)
-        if repeat_slit_losses is not None:
-            loss_slit_indices = np.arange(repeat_slit_losses.shape[0])
-            ax_loss.plot(loss_slit_indices, repeat_slit_losses, color='tab:red', marker='.', label='Loss')
-
-            ax_loss.set_title(f'Evolution of fitted loss function value across raster repeat {repeat_number}')
-            ax_loss.set_xlabel('Slit index')
-            ax_loss.set_ylabel('Loss (negative correlation)')
-            ax_loss.grid(True, alpha=0.3)
-            ax_loss.legend(loc='best', fontsize=8)
-        else:
-            ax_loss.set_title(f'Evolution of fitted loss function value across raster repeat {repeat_number}')
-            ax_loss.text(0.5, 0.5, 'No slit-by-slit fitted loss values available', ha='center', va='center')
-            ax_loss.set_axis_off()
-
-        plt.tight_layout()
-
-        if repeat_count == 1:
-            fig.savefig(save_path, dpi=300, bbox_inches='tight')
-        else:
-            repeat_save_path = save_path.with_name(f"{save_path.stem}_repeat_{repeat_number}{save_path.suffix}")
-            fig.savefig(repeat_save_path, dpi=300, bbox_inches='tight')
-
     cfg.log("DONE")
-
-    plt.show()
