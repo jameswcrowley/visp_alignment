@@ -23,14 +23,14 @@ class Config:
         self,
         path_to_dkist_data: str,
         path_to_sunpy: str,
-        wavelength_index = None,
+        # wavelength_index = None,
         raster_repeats = None,
         verbose = False,
         grid_search = False,
     ):
         self.path_to_dkist_data = path_to_dkist_data
         self.path_to_sunpy = path_to_sunpy
-        self.wavelength_index = wavelength_index
+        # self.wavelength_index = wavelength_index
         self.raster_repeats = raster_repeats
         self.verbose = verbose
         self.grid_search = grid_search
@@ -204,10 +204,11 @@ class DataLoader:
         mean_data(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
         """
         first_file_path = next(Path(self.cfg.path_to_dkist_data).glob("*.fits"))
-        slit_1_data = fits.open(first_file_path)[1].data[0]
+        with fits.open(first_file_path, mmep = True) as header_data_unit: #opens fits file wiith memory mapping
+            slit_1_data = header_data_unit[1].data[0]
         # print("Shape of slit data", slit_1_data.shape)
 
-        median_wavelength_data = np.nanmedian(slit_1_data, axis = 1) # median spectra for all slits and positions along slits
+        median_wavelength_data = np.nanmedian(slit_1_data[:, ::5], axis = 1) # median spectra for all wavelengths around every 5th slit
         # print("Median_wavelength_data", median_wavelength_data.shape, median_wavelength_data)
 
         threshold = np.nanpercentile(median_wavelength_data, 95) # 95th percentile of the median spectra values
@@ -223,29 +224,39 @@ class DataLoader:
 
         # print(f'Dataset loaded from {asdf_path} with shape {ds[:, :, :, :].data.shape}')
         #TODO: figure out how to optimize getting data from ds
-        all_data = None
+        dask_slices = None
         if ds.wcs.pixel_n_dim == 4:
-            all_data = np.array(ds[0, :, :, :].data) # load all slits, slit positions, and wavelenghths of the dataset across the first Stoke/Raster
+            dask_slices = [ds[0, :, :, :].data] # load all slits, slit positions, and wavelenghths of the dataset across the first Stoke/Raster
         elif ds.wcs.pixel_n_dim == 5:
-            repeat_slices = [np.array(ds[0, repeat_index, :, :, :].data) for repeat_index in selected_repeat_indices]
-            all_data = np.concatenate(repeat_slices, axis=0) if len(repeat_slices) > 1 else repeat_slices[0]
+            dask_slices = [ds[0, rep, :, :, :].data for rep in selected_repeat_indices]
         else:
-            all_data = np.array(ds[:, :, :].data)
-        
-        self.cfg.log("Shape of all the data", all_data.shape)
-        self.cfg.log("Checks if there are any non nan values", not np.isnan(all_data).all())
- 
-        relevant_data = all_data[:, wavelength_indicies, :] # gets the data of all wavelengths across all slits for the indicies above the threshold
-        self.cfg.log(50 * '-')
-        self.cfg.log("Shape of the relevant data", relevant_data.shape)
-        # print("relevant Data: ", relevant_data)
-        self.cfg.log(50 * '-')
-        self.cfg.log("Checks if there are any non nan values", not np.isnan(relevant_data).all())
+            dask_slices = [ds[:, :, :].data]
 
-        mean_data = np.nanmean(relevant_data, axis = 1) # mean of the data across the wavelength samples above the threshold
+        processed_repeats = []
+        for d_slice in dask_slices:
+            # Check if wavelengths can be sliced contiguously(aka if they are consecutive)
+            if len(wavelength_indicies) > 0 and np.all(np.diff(wavelength_indicies) == 1):
+                s = slice(wavelength_indicies[0], wavelength_indicies[-1] + 1) #slice from first to last index
+                selected_dask = d_slice[:, s, :]
+            else:
+                selected_dask = da.take(d_slice, wavelength_indicies, axis=1)
 
-        mean_data = self.normalize(mean_data)
-        return mean_data 
+            # Average along wavelength axis inside Dask
+            collapsed = da.nanmean(selected_dask, axis=1)
+            processed_repeats.append(collapsed)
+
+        # Concatenate along the slit dimension (axis=0) if multiple repeats
+        final_dask = None
+        if len(processed_repeats) > 1:
+            final_dask = da.concatenate(processed_repeats, axis=0)
+        else:
+            final_dask = processed_repeats[0]
+
+        # Trigger single parallel computation to NumPy
+        self.cfg.log("Computing collapsed DKIST intensity map via Dask...")
+        mean_data = final_dask.compute() #finally converts the lazy array to something useful
+
+        return self.normalize(mean_data)
     
     def get_dkist_wavelengths2(self):
         """
@@ -1286,7 +1297,7 @@ if __name__ == "__main__":
     cfg = Config(
     path_to_dkist_data=path_to_dkist_data, 
     path_to_sunpy=path_to_sunpy, 
-    wavelength_index=30, 
+    # wavelength_index=30, 
     raster_repeats=0,
     verbose=True,
     grid_search=True # Try setting this option to True if your dataset is QS or doens't have a clear feature, like a sunspot. 
