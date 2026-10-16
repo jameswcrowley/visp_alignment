@@ -13,6 +13,7 @@ from scipy import interpolate as interp
 import scipy.optimize as opt
 import bisect
 from itertools import chain
+import dask.array as da
 
 class Config:
     """
@@ -28,6 +29,17 @@ class Config:
         verbose = False,
         grid_search = False,
     ):
+        """
+        Initializes the configuration settings for the alignment pipeline.
+
+        Parameters:
+        -----------
+        path_to_dkist_data (str): The folder path where the DKIST .fits and .asdf files are stored.
+        path_to_sunpy (str): The local directory path used by SunPy to download HMI data. 
+        raster_repeats (int or list, optional): The raster repeat index or list of indices to process. Default is None.
+        verbose (bool, optional): If True, prints detailed status logs during execution. Default is False.
+        grid_search (bool, optional): If True, performs a grid search for initial alignment. Default is False.
+        """
         self.path_to_dkist_data = path_to_dkist_data
         self.path_to_sunpy = path_to_sunpy
         # self.wavelength_index = wavelength_index
@@ -36,6 +48,14 @@ class Config:
         self.grid_search = grid_search
 
     def log(self, *args, **kwargs):
+        """
+        Prints log messages to standard output if verbose is true.
+
+        Parameters:
+        -----------
+        *args: Variable length argument list to pass to the print function.
+        **kwargs: Arbitrary keyword arguments to pass to the print function.
+        """
         if self.verbose:
             print(*args, **kwargs)
         
@@ -50,6 +70,13 @@ class DataLoader:
     """
 
     def __init__(self, cfg: Config):
+        """
+        Initializes the data loader, automatically triggering header loading, intensity mapping, and HMI fetching.
+
+        Parameters:
+        -----------
+        cfg (Config): An instance of the Config class containing file paths and settings.
+        """
         self.cfg = cfg
 
         # DKIST header / raster-repeat bookkeeping. get_dkist_headers() also sets
@@ -64,7 +91,7 @@ class DataLoader:
 
         # DKIST intensity map
         self.cfg.log("Building DKIST intensity map")
-        self.intensities = self.get_dkist_wavelengths2()
+        self.intensities = self.get_dkist_wavelengths()
 
         if self.intensities.shape[0] != len(self.changing_keywords["DATE-AVG"]):
             raise ValueError(
@@ -84,15 +111,30 @@ class DataLoader:
 
     def get_time(self, changing_keywords):
         """
-        The method uses the path_to_dkist_data from the configuration to locate the DKIST .fits files.
+        Gets the start and end times of the DKIST data in the folder
+
+        Parameters:
+        -----------
+        changing_keywords (dict): A dictionary of lists containing changing header values, including the key 'DATE-AVG'.
 
         Returns:
         ---------
-        tuple: A tuple containing the start and end times of the DKIST data in the folder
+        tuple: A tuple containing the (start time, end time) of the DKIST data in the folder
         """
         return (changing_keywords["DATE-AVG"][0], changing_keywords["DATE-AVG"][-1])
 
     def _normalize_raster_repeat_selection(self, repeat_count):
+        """
+        Validates and normalizes the user-selected raster repeats against the total available repeats in the dataset.
+
+        Parameters:
+        -----------
+        repeat_count (int): The total number of complete raster repeats found in the files.
+
+        Returns:
+        --------
+        list: A validated list of integer indices representing the selected raster repeats.
+        """
         selection = self.cfg.raster_repeats
 
         if selection is None:
@@ -124,6 +166,17 @@ class DataLoader:
         return selected
 
     def normalize(self, arr):
+        """
+        Normalizes a data array using robust percentile clipping (1st to 99th percentile) to handle bad pixels.
+
+        Parameters:
+        -----------
+        arr (numpy.ndarray): The raw input array to be normalized.
+
+        Returns:
+        --------
+        numpy.ndarray: The normalized array scaled between roughly -0.5 and 0.5 with zero median.
+        """
         arr = np.asarray(arr, dtype=float)
 
         arr = np.asarray(arr, dtype=float)
@@ -155,6 +208,9 @@ class DataLoader:
         start_time (Time): The start time of the interval
         end_time (Time): The end time of the interval
 
+        Returns:
+        --------
+        tuple: A tuple containing (middle_hmix, middle_hmiy, middle_hmi_data, hmi_files).
         """
         self.cfg.log(f"Searching HMI data from {start_time.isot} to {end_time.isot}")
 
@@ -183,6 +239,13 @@ class DataLoader:
         return middle_hmix, middle_hmiy, middle_hmi_data, hmi_files
     
     def get_all_hmi_times(self, hmi_files):
+        """
+        Extracts and stores the timestamps for every downloaded HMI FITS file.
+
+        Parameters:
+        -----------
+        hmi_files (list): A list of file paths pointing to the downloaded HMI FITS files.
+        """
         hmi_times = []
 
         for file in hmi_files:
@@ -260,10 +323,11 @@ class DataLoader:
     
     def get_dkist_wavelengths2(self):
         """
-        Returns a 2D spatial intensity map where each pixel contains the average
-        intensity of the first 30 wavelengths
-        ----------
-        numpy.ndarray: A 2D array of the mean intensity values across the first 30 wavelengths
+        Returns a 2D spatial intensity map where each pixel contains the average intensity of the first 30 wavelengths.
+
+        Returns:
+        --------
+        numpy.ndarray: A 2D array of the mean intensity values across the first 30 wavelengths.
         """
         asdf_path = next(Path(self.cfg.path_to_dkist_data).glob("*.asdf"))
         ds = dkist.load_dataset(asdf_path)
@@ -283,16 +347,13 @@ class DataLoader:
 
     def get_dkist_headers(self):
         """
-        Returns the 2 arrays of the fixed and changing keywords from the DKIST headers
-
-        Parameters:
-        ------------
-        folder_path (str): the path to the DKIST data folder
+        Returns the 2 dictionaries of the fixed and changing keywords from the DKIST headers
 
         Returns:
         ---------
         fixed_keywords(dict): A dictionary of fixed keywords {key: value}
         changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
+        selected_fits_files (list): A list of the selected stokes _I_ fits files from the selected raster repeats
         """
         fits_files = [x for x in sorted(os.listdir(self.cfg.path_to_dkist_data)) if '.fits' in x and '_I_' in x]
         self.cfg.log(f"Found {len(fits_files)} DKIST FITS files")
@@ -357,17 +418,7 @@ class DataLoader:
 
     def load(self):
         """
-        Main for the DataLoader class.
-
-        Returns:
-        --------
-        fixed_keywords(dict): A dictionary of fixed keywords {key: value}
-        changing_keywords(dict of lists): A dictionary of lists containing the changing keywords {key: [values]}
-        fits_files(list): A list of the fits files in the DKIST data folder
-        intensities(numpy.ndarray): A 2D array of the mean intensity values across the wavelength samples above the threshold of 95th percentile
-        hmix(numpy.ndarray): the x coordinates of the HMI data
-        hmiy(numpy.ndarray): the y coordinates of the HMI data
-        hmi_data(numpy.ndarray): the intensity data of the HMI data
+        Main loading for the DataLoader class, fetching headers, building intensity maps, and loading HMI data.
         """
 
         self.cfg.log("Loading DKIST headers")
@@ -376,7 +427,7 @@ class DataLoader:
         self.cfg.log(f"DKIST time span: {self.start_time} to {self.end_time}")
 
         self.cfg.log("Building DKIST intensity map")
-        self.intensities = self.get_dkist_wavelengths2()
+        self.intensities = self.get_dkist_wavelengths()
 
         if self.intensities.shape[0] != len(self.changing_keywords["DATE-AVG"]):
             raise ValueError(
@@ -400,6 +451,18 @@ class Alignment:
         self.data_loader = data_loader
 
     def find_nearest_hmi(self, target, hmi_times):
+        """
+        Finds the index of the HMI image whose timestamp is closest to the target DKIST slit time.
+
+        Parameters:
+        -----------
+        target (astropy.time.Time): The timestamp of a specific DKIST slit observation.
+        hmi_times (list): A list of timestamps for all loaded HMI files.
+
+        Returns:
+        --------
+        best (int): The index of the nearest HMI file in the list.
+        """
         idx = bisect.bisect_left(hmi_times, target)
         if idx == 0:
             best = 0
@@ -411,6 +474,20 @@ class Alignment:
         return best
     
     def get_hmi(self, hmi_files, i):
+        """
+        Loads a specific HMI map by its index, extracts its spatial coordinates, and normalizes its intensity data.
+
+        Parameters:
+        -----------
+        hmi_files (list): A list of paths to the HMI FITS files.
+        i (int): The index of the specific HMI file to load.
+
+        Returns:
+        --------
+        hmix (numpy.ndarray): The x coordinates of the HMI data.
+        hmiy (numpy.ndarray): The y coordinates of the HMI data.
+        hmi_data (numpy.ndarray): The normalized intensity data of the HMI map.
+        """
 
         hmi = map.Map(hmi_files[i])
 
@@ -434,6 +511,7 @@ class Alignment:
         -----------
         fixed_keywords (dict): a dictionary of the fixed keywords from the DKIST headers, with keys 'CDELT1', 'CDELT3', 'PC1_1', 'PC1_3', 'PC3_1', 'PC3_3', 'DNAXIS3', and 'DNAXIS1'.
         changing_keywords (dict): a dictionary of the changing keywords from the DKIST headers, with keys 'CRVAL1', 'CRVAL3', 'CRPIX1', 'CRPIX3', and 'DATE-AVG'. Each key maps to a list of values, one for each slit.
+        parameters (tuple): a tuple of 6 parameters (crval1_shift, crval3_shift, pc1_1_shift, pc3_1_shift, pc1_3_shift, pc3_3_shift)
 
         Returns:
         --------
@@ -536,16 +614,16 @@ class Alignment:
 
     def interpolate_hmi_to_coords(self, interpolator, coords):
         """
-        This function interpolates the relevant HMI data onto the DKIST coordinates. It returns a 2D array of the interpolated HMI data, with shape (nx, ny), where nx is the number of slits and ny is the number of pixels along the slit.
-        
+        Interpolates the HMI reference data onto a given set of DKIST spatial coordinates.
+
         Parameters:
         -----------
-        interpolator (scipy.interpolate.RegularGridInterpolator): a RegularGridInterpolator object that can be used to interpolate the relevant HMI data onto any set of coordinates.
-        coords (numpy.ndarray): a 3D array of the coordinates of the DKIST data, with shape (nx, ny, 2), where nx is the number of slits, ny is the number of pixels along the slit, and 2 is for the x and y coordinates.
-        
+        interpolator (scipy.interpolate.RegularGridInterpolator): The HMI grid interpolator object.
+        coords (numpy.ndarray): A 3D array of DKIST coordinates with shape (nx, ny, 2).
+
         Returns:
         --------
-        Z_fine (numpy.ndarray): a 2D array of the interpolated HMI data, with shape (nx, ny), where nx is the number of slits and ny is the number of pixels along the slit.
+        numpy.ndarray: A 2D array of interpolated HMI data matching the DKIST grid shape.
         """
         HMI_interpolated_to_coords = interpolator((coords[:, :, 1], coords[:, :, 0]))
 
@@ -690,9 +768,19 @@ class Alignment:
         reference_parameters=None
     ):
         """
-        Calculates alignment loss between interpolated HMI data and DKIST data.
-        Includes an optional regularization term that discourages large
-        deviations from a reference parameter vector.
+        Calculates the alignment loss (negative Pearson correlation) between interpolated HMI data and DKIST data.
+
+        Parameters:
+        -----------
+        parameters (tuple/list): The current coordinate transformation parameters being evaluated.
+        changing_keywords (dict): The changing header keywords for the current subset of slits.
+        data_numpy (numpy.ndarray): The DKIST intensity data array.
+        interpolator (scipy.interpolate.RegularGridInterpolator): The HMI interpolator object.
+        reference_parameters (tuple/list, optional): Optional reference parameters used for regularization penalties.
+
+        Returns:
+        --------
+        float: The calculated loss value (lower values indicate better alignment).
         """
 
         coords_new = self.construct_dkist_coords(self.data_loader.fixed_keywords, changing_keywords, parameters)
@@ -746,17 +834,20 @@ class Alignment:
         save_slit_fitted_parameters_path=None,
     ):
         """
-        This function performs the optimization to find the best parameters to align the DKIST data with the HMI data.
-        It returns the best parameters found by the optimization.
+        The main method for the Alignment class, combining rough grid search and slit-by-slit(or block-by-block) optimization.
 
         Parameters:
         -----------
-        initial_guess (tuple): a tuple of the initial guess for the parameters to modify the crval and pc values.
-        bounds (list): a list of tuples specifying the bounds for each parameter.
+        initial_guess (tuple): Initial guess for the coordinate transformation parameters.
+        bounds (list): A list of boundary tuples for each parameter.
+        return_slit_fitted_parameters (bool, optional): If True, returns fitted parameters for every slit. Default is False.
+        save_slit_fitted_parameters_path (str, optional): File path to save the resulting parameters as a .npy file. Default is None.
 
         Returns:
         --------
-        best_parameters (tuple): a tuple of the best parameters found by the optimization.
+        best_parameters (tuple): The best-fit parameters after optimization.
+        result (bool): Success status of the optimization.
+        final_coordinates (numpy.ndarray): The final DKIST coordinates after alignment.
         """
         # self.data_loader.hmi_times is already populated by DataLoader's constructor.
         middle_image_time = self.data_loader.hmi_times[len(self.data_loader.hmi_times)//2]
@@ -818,7 +909,26 @@ class Alignment:
         interpolator=None,
         reference_parameters=None
     ):
+        """
+        Runs a numerical optimization algorithm (Powell method) to minimize alignment loss for a set of slits.
 
+        Parameters:
+        -----------
+        initial_guess (tuple): Starting parameter values for the optimization algorithm.
+        bounds (list): Allowed search boundaries for each parameter.
+        changing_keywords (dict): Header keywords for the active slits.
+        intensities (numpy.ndarray): DKIST intensity array for the active slits.
+        hmix, hmiy, hmi_data (numpy.ndarray): HMI coordinate and intensity arrays.
+        delta (float, optional): Padding buffer in arcseconds around the DKIST footprint. Default is 20.
+        interpolator (RegularGridInterpolator, optional): Pre-built HMI interpolator. Default is None.
+        reference_parameters (list, optional): Reference parameters for regularization. Default is None.
+
+        Returns:
+        --------
+        best_parameters (tuple): The optimized parameters after alignment.
+        result.success (bool): Success status of the optimization.
+        result.fun (float): The final loss value after optimization.
+        """
         self.cfg.log(f"Running optimization with initial guess: {np.array(initial_guess)}")
 
         if interpolator is None:
@@ -856,6 +966,20 @@ class Alignment:
         return_fitted_parameters=False,
         save_fitted_parameters_path=None,
     ):
+        """
+        Aligns the DKIST raster scan one slit (or block of slits) at a time to account for temporal drift.
+
+        Parameters:
+        -----------
+        initial_guess (tuple): Starting parameter values for the optimization.
+        bounds (list): Parameter search boundaries.
+        return_fitted_parameters (bool, optional): If True, returns arrays of fitted parameters per slit. Default is False.
+        save_fitted_parameters_path (str, optional): File path to save slit-by-slit parameters. Default is None.
+
+        Returns:
+        --------
+        final_coordinates (numpy.ndarray or tuple): Final aligned coordinates across all slits (and optional fitted parameters/losses).
+        """
 
         ny = self.data_loader.fixed_keywords['DNAXIS1']
         repeat_ranges = getattr(self.data_loader, "repeat_ranges", None)
@@ -980,6 +1104,19 @@ class Alignment:
         return final_coordinates
 
     def _process_synthetic_hmi_block(self, start, end, hmi_index, coords, delta):
+        """
+        Builds a synthetic HMI image sampled precisely on a DKIST coordinate grid, matching each slit's timestamp.
+
+        Parameters:
+        -----------
+        coords (numpy.ndarray): DKIST spatial coordinates with shape (nx, ny, 2).
+        hmi_indices (list[int], optional): Specific HMI frame index to use for each slit. Default is None.
+        delta (float, optional): Padding buffer in arcseconds when cropping HMI data. Default is 20.
+
+        Returns:
+        --------
+        numpy.ndarray: 2d HMI array interpolated to DKIST coordinates' scale
+        """
         hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, hmi_index)
 
         block_coords = coords[start:end]
@@ -1047,6 +1184,22 @@ class Alignment:
         return synthetic_hmi, hmi_indices
     
     def _process_block(self, start, end, hmi_index, last_best, bounds):
+        """
+        Aligns a continuous subset (block) of DKIST slits against a single HMI frame.
+
+        Parameters:
+        -----------
+        start (int): The starting slit index for the block.
+        end (int): The ending slit index for the block (exclusive).
+        hmi_index (int): The index of the HMI reference image to align against.
+        last_best (tuple or list): Initial parameter guess from the previously aligned block.
+        bounds (list): Allowed search boundaries for each alignment parameter.
+
+        Returns:
+        --------
+        best_parameters (tuple): The optimized parameters for the current block.
+        coords (numpy.ndarray): The final DKIST coordinates for the current block after alignment.
+        """
         hmix, hmiy, hmi_data = self.get_hmi(self.data_loader.hmi_files, hmi_index)
 
         block_keywords = {
@@ -1073,6 +1226,20 @@ class Alignment:
             return_fitted_parameters=False,
             save_fitted_parameters_path=None,
         ):
+        """
+        Aligns DKIST slits in blocks grouped by their nearest HMI reference frame.
+
+        Parameters:
+        -----------
+        initial_guess (tuple or list): Initial parameter guess to seed the optimization.
+        bounds (list): Allowed search boundaries for each alignment parameter.
+        return_fitted_parameters (bool, optional): If True, returns the fitted parameters for all slits. Default is False.
+        save_fitted_parameters_path (str, optional): File path to save the fitted parameters as a .npy file. Default is None.
+
+        Returns:
+        --------
+        final_coordinates (numpy.ndarray): The final reconstructed coordinates across all slits with shape (nx, ny, 2), optionally accompanied by the fitted parameters array if return_fitted_parameters is True.
+        """
         nx = self.data_loader.fixed_keywords['DNAXIS3']
         ny = self.data_loader.fixed_keywords['DNAXIS1']
 
@@ -1128,12 +1295,45 @@ class Alignment:
 class Plot:
     "Class for plotting all the data and results from the alignment process."
     def __init__(self, cfg:Config, loader: DataLoader, alignment: Alignment):
+        """
+        Initializes the plotter with configuration, data loader, and alignment instances.
+
+        Parameters:
+        -----------
+        cfg (Config): Configuration settings instance.
+        loader (DataLoader): Loaded dataset instance.
+        alignment (Alignment): Alignment processing instance.
+        """
         self.cfg = cfg
         self.loader = loader
         self.alignment = alignment
 
     def _prepare_visualization_data(self, original_coords, final_coords, best_params, use_syntheic_hmi_viz):
-        "Gets all the data required for visualization"
+        """
+        Precomputes the background HMI reference image and synthetic HMI datasets
+        used for plotting comparisons before and after alignment.
+
+        Parameters:
+        -----------
+        original_coords (numpy.ndarray): 3D array of initial unaligned DKIST coordinates,
+            with shape (nx, ny, 2).
+        final_coords (numpy.ndarray): 3D array of final aligned DKIST coordinates,
+            with shape (nx, ny, 2).
+        best_params (tuple or list): The optimal transformation parameters determined
+            by the alignment optimization.
+        use_syntheic_hmi_viz (bool): If True, samples time-matched synthetic HMI frames
+            for each slit; if False, uses a single static middle-frame HMI image.
+
+        Returns:
+        --------
+        tuple: A tuple containing:
+            - hmi_background (tuple): (relevant_hmix, relevant_hmiy, relevant_hmi_data)
+              representing the cropped static background HMI frame and coordinates.
+            - synthetic_original (numpy.ndarray): HMI intensity values interpolated onto
+              the unaligned DKIST coordinates.
+            - synthetic_final (numpy.ndarray): HMI intensity values interpolated onto
+              the aligned DKIST coordinates.
+        """
         coords_new = self.alignment.construct_dkist_coords(self.loader.fixed_keywords, self.loader.changing_keywords, best_params)
 
         middle_image_time = self.loader.hmi_times[len(self.loader.hmi_times)//2]
@@ -1156,8 +1356,8 @@ class Plot:
             print("set synthetic variables")
             self.cfg.log("Using legacy single-frame HMI visualization mode")
 
-        print("Synthetic original:", synthetic_original)
-        print("Synthetic final:", synthetic_final)
+        # print("Synthetic original:", synthetic_original)
+        # print("Synthetic final:", synthetic_final)
         return (relevant_hmix, relevant_hmiy, relevant_hmi_data), synthetic_original, synthetic_final
 
     def plot_results(
@@ -1171,7 +1371,20 @@ class Plot:
             use_synthetic_hmi_viz = True,
             show = True
     ):
-        "Generates the 4x2 final plot for each raster repeat, saves it, and graphs the parameter and loss evolutions across slits"
+        """
+        Generates 4x2 multi-panel diagnostic plots comparing DKIST and HMI data before and after alignment for each repeat.
+
+        Parameters:
+        -----------
+        original_coords (numpy.ndarray): Unaligned DKIST spatial coordinates.
+        final_coords (numpy.ndarray): Final aligned DKIST spatial coordinates.
+        best_parameters (tuple): Best optimization parameters found.
+        save_path (str): File path where the output figure should be saved.
+        slit_fitted_parameters (numpy.ndarray, optional): Array of parameters fitted per slit. Default is None.
+        slit_fitted_losses (numpy.ndarray, optional): Array of loss values recorded per slit. Default is None.
+        use_synthetic_hmi_viz (bool, optional): If True, uses multi-frame time-matched synthetic HMI background. Default is True.
+        show (bool, optional): If True, displays the plot on screen using plt.show(). Default is True.
+        """
         hmi_data, synthetic_original, synthetic_final = self._prepare_visualization_data(original_coords, final_coords, best_params, use_synthetic_hmi_viz)  
         relevant_hmix, relevant_hmiy, relevant_hmi_data = hmi_data
 
@@ -1285,8 +1498,11 @@ if __name__ == "__main__":
     # path_to_dkist_data = "/Users/jamescrowley/Documents/summer_2026/research/pid_3_35/XVNDZY"
     # path_to_sunpy = "~/sunpy/data/"
 
-    path_to_dkist_data = "C:\\Projects\\Dkist_data\\KRBVTD"
-    path_to_sunpy = "C:\\Projects\\HMI_data"
+    # path_to_dkist_data = "C:\\Projects\\Dkist_data\\KRBVTD"
+    # path_to_sunpy = "C:\\Projects\\HMI_data"
+
+    path_to_dkist_data = "C:\\Vighnesh Personal\\DKIST Alignment Data\\pid_3_35\\XVNDZY"
+    path_to_sunpy = "C:\\Vighnesh Personal\\DKIST Alignment Data\\HMI Data"
     
     output_folder = "saved_plots"
     filename = "my_plot.png"
