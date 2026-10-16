@@ -29,3 +29,11 @@ import scipy.optimize as opt
 import bisect
 from itertools import chain
 ```
+
+## Sample Code Output
+The code outputs 2 images. Here what they should look like: 
+![Aligned vs Misaligned DKIST Data](saved_plots/my_plot_maps.png)
+These graphs plots the DKIST data on top of HMI. The two graphs on the top show the misaligned data, whereas the bottom two graphs show the aligned data. 
+![Aligned vs Misaligned DKIST Data](saved_plots/my_plot_diagnostics.png)
+The graph on the top here shows how the parameters used to buid the DKIST coordinates changed as move down slit by slit. The graph on the bottom shows how the loss function changes as we move doing slit by slit. 
+
