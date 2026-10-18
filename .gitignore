@@ -18,4 +18,7 @@ uv.lock
 test.ipynb
 testing.py
 
-saved_plots/
+saved_plots/*
+!saved_plots/
+!saved_plots/my_plot_maps.png
+!saved_plots/my_plot_diagnostics.png
